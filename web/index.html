@@ -35,15 +35,16 @@
       <div id="examples" class="chips"></div>
 
       <div class="row">
-        <button id="decide" class="btn primary">What should I use?</button>
+        <select id="decider" title="Which model decides">
+          <option value="encoder">MetaEncoder — one pass, cosine</option>
+          <option value="glimmer">Glimmer — reasoning</option>
+          <option value="both">Both — compare</option>
+        </select>
         <label class="check"><input id="blind" type="checkbox"> blind (no image)</label>
       </div>
+      <button id="decide" class="btn primary">What should I use?</button>
 
-      <div id="result" class="result" hidden>
-        <div id="hint" class="hint"></div>
-        <div id="meta" class="meta"></div>
-        <details><summary>raw model output</summary><pre id="raw"></pre></details>
-      </div>
+      <div id="results" class="results"></div>
 
       <details class="label-box">
         <summary>Save sample for the eval set</summary>

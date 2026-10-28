@@ -22,6 +22,8 @@ class Action:
     label: str        # shown to the model as the option text
     hint: str         # shown to the user when chosen
     concept: str | None = None  # short noun phrase for SAM 3.1 highlight
+    name: str = ""    # short option name for MetaEncoder ("binder clip", "none")
+    detail: str = ""  # what the option means; MetaEncoder pairs it with the name
 
 
 @dataclass(frozen=True)
@@ -43,9 +45,11 @@ class Domain:
 def _special_actions() -> list[Action]:
     return [
         Action(NONE, "none of the visible objects fits the goal",
-               "I don't see a suitable object in the frame."),
+               "I don't see a suitable object in the frame.",
+               name="none", detail="no object visible in the frame fits the goal and its constraints"),
         Action(ASK_VIEW, "the view is unclear (blurred, occluded, cropped) - ask for another angle",
-               "Show me the table from another angle, without occlusion."),
+               "Show me the table from another angle, without occlusion.",
+               name="unclear view", detail="the frame is too blurred, dark, cropped or occluded to decide"),
     ]
 
 
@@ -58,6 +62,8 @@ def load_domain(domain_id: str) -> Domain:
             label=f"use the {o['name']}",
             hint=o.get("hint") or f"Take the {o['name']}.",
             concept=o.get("concept") or o["name"],
+            name=o["name"],
+            detail=o.get("detail", ""),
         )
         for o in raw["objects"]
     ]

@@ -2,14 +2,14 @@
   "id": "desk",
   "title": "Desk: paper & packaging",
   "objects": [
-    {"id": "binder_clip", "name": "binder clip", "hint": "Take the binder clip."},
-    {"id": "stapler", "name": "stapler", "hint": "Take the stapler."},
-    {"id": "tape", "name": "tape roll", "concept": "tape", "hint": "Take the tape."},
-    {"id": "marker", "name": "marker", "hint": "Take the marker."},
-    {"id": "scissors", "name": "scissors", "hint": "Take the scissors."},
-    {"id": "glue", "name": "glue stick", "hint": "Take the glue stick."},
-    {"id": "envelope", "name": "envelope", "hint": "Take the envelope."},
-    {"id": "box", "name": "cardboard box", "concept": "box", "hint": "Use the box."}
+    {"id": "binder_clip", "name": "binder clip", "detail": "holds a stack of sheets together temporarily, no holes, removable", "hint": "Take the binder clip."},
+    {"id": "stapler", "name": "stapler", "detail": "fastens sheets permanently by punching a staple through them", "hint": "Take the stapler."},
+    {"id": "tape", "name": "tape roll", "concept": "tape", "detail": "sticks things together or seals a package shut", "hint": "Take the tape."},
+    {"id": "marker", "name": "marker", "detail": "writes or labels on paper, cardboard and boxes", "hint": "Take the marker."},
+    {"id": "scissors", "name": "scissors", "detail": "cuts paper, tape or string", "hint": "Take the scissors."},
+    {"id": "glue", "name": "glue stick", "detail": "glues paper to paper permanently", "hint": "Take the glue stick."},
+    {"id": "envelope", "name": "envelope", "detail": "holds a few documents for mailing", "hint": "Take the envelope."},
+    {"id": "box", "name": "cardboard box", "concept": "box", "detail": "packs bulky items for shipping or storage", "hint": "Use the box."}
   ],
   "example_goals": [
     "Temporarily hold these sheets together without punching holes or glue",

@@ -1,8 +1,9 @@
-"""Glimmer as a decision model: camera frame + goal -> one action from a closed set.
+"""Generative Glimmer ("System 2"): camera frame + goal -> one action from a closed set.
 
-No training here. The base model is prompted with lettered options and must end
-with a single `ANSWER: <letter>` line; anything else is a parse failure, which we
-report instead of silently guessing.
+Comparison baseline and fallback for the MetaEncoder decider (encoder.py). Hosted
+Glimmer always reasons before answering, so this path is slower; it is prompted with
+lettered options and must end with a single `ANSWER: <letter>` line. Anything else is
+a parse failure, which we report instead of silently guessing.
 """
 from __future__ import annotations
 
@@ -34,7 +35,7 @@ ANSWER_RE = re.compile(r"ANSWER\s*[:=]\s*\(?([A-Z])\)?", re.IGNORECASE)
 
 @dataclass
 class Decision:
-    action: str | None       # action id, None on parse failure
+    action: str | None       # action id, None on failure
     letter: str | None
     hint: str
     concept: str | None      # what SAM should highlight, if anything
@@ -42,9 +43,22 @@ class Decision:
     latency_ms: int
     blind: bool = False
     error: str | None = None
+    decider: str = "glimmer"
+    probs: dict[str, float] | None = None   # per-action probability (encoder only)
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def finish(domain: Domain, action_id: str | None, raw: str, latency_ms: int, blind: bool,
+           error: str | None, decider: str, probs: dict[str, float] | None = None) -> Decision:
+    if action_id is None:
+        return Decision(None, None, "Could not get a decision - try again.", None,
+                        raw, latency_ms, blind, error, decider, probs)
+    letter = next(l for l, a in domain.letters() if a.id == action_id)
+    action = domain.by_id(action_id)
+    concept = action.concept if action.id not in (NONE, ASK_VIEW) else None
+    return Decision(action.id, letter, action.hint, concept, raw, latency_ms, blind, error, decider, probs)
 
 
 def build_messages(domain: Domain, goal: str, image_data_url: str | None,
@@ -97,6 +111,8 @@ def decide(settings: Settings, domain: Domain, goal: str,
     blind = image_data_url is None
     t0 = time.perf_counter()
 
+    if not settings.glimmer_enabled:
+        return finish(domain, None, "", 0, blind, "Glimmer is not configured (GLIMMER_API_KEY)", "glimmer")
     if settings.mock:
         letter = _mock_letter(domain, goal, not blind)
         raw = f"(mock)\nANSWER: {letter}"
@@ -122,7 +138,8 @@ def decide(settings: Settings, domain: Domain, goal: str,
             raw = msg.get("content") or ""
             if not ANSWER_RE.search(raw):
                 # Some providers split the channels; the answer may sit in reasoning.
-                raw = (raw + "\n" + (msg.get("reasoning_content") or "")).strip()
+                reasoning = msg.get("reasoning") or msg.get("reasoning_content") or ""
+                raw = (raw + "\n" + reasoning).strip()
             error = None
         except (httpx.HTTPError, KeyError, ValueError) as e:
             detail = getattr(getattr(e, "response", None), "text", "")
@@ -135,9 +152,5 @@ def decide(settings: Settings, domain: Domain, goal: str,
             error = "unparseable answer"
 
     latency_ms = int((time.perf_counter() - t0) * 1000)
-    if letter is None:
-        return Decision(None, None, "Could not get a decision - try again.", None,
-                        raw, latency_ms, blind, error)
-    action = letters[letter]
-    concept = action.concept if action.id not in (NONE, ASK_VIEW) else None
-    return Decision(action.id, letter, action.hint, concept, raw, latency_ms, blind, error)
+    action_id = letters[letter].id if letter else None
+    return finish(domain, action_id, raw, latency_ms, blind, error, "glimmer")

@@ -1,10 +1,14 @@
 import os
+from dataclasses import replace
 
 os.environ["MOCK"] = "1"
 
+import numpy as np  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
+from server import encoder  # noqa: E402
 from server.app import app  # noqa: E402
+from server.config import load_settings  # noqa: E402
 from server.decision import build_messages, parse_letter  # noqa: E402
 from server.sam import parse_boxes  # noqa: E402
 from server.tasks import ASK_VIEW, NONE, load_domain  # noqa: E402
@@ -19,6 +23,7 @@ def test_domain_has_refusal_options():
     assert ids[-2:] == [NONE, ASK_VIEW]
     assert "TAKE_BINDER_CLIP" in ids
     assert d.letters()[0][0] == "A"
+    assert all(a.name and a.detail for a in d.actions)
 
 
 def test_parse_letter_takes_last_answer_and_bounds():
@@ -46,17 +51,69 @@ def test_parse_sam_boxes():
     assert parse_boxes("") == []
 
 
-def test_api_decide_and_capture(tmp_path, monkeypatch):
+def test_encoder_task_format_and_candidates():
+    d = load_domain("desk")
+    t = encoder.task_text(d, " Label this box ")
+    assert t.startswith("User goal: Label this box\n\nTask: Select the correct option")
+    assert "\nCriteria:\n- binder clip: holds" in t and "- none: " in t
+    assert encoder.candidate_texts(d, "label")[0] == "binder clip"
+    assert encoder.candidate_texts(d, "label_detail")[0].startswith("binder clip: ")
+
+
+def test_encoder_cosine_softmax_and_cache():
+    d = load_domain("desk")
+    names = encoder.candidate_texts(d, "label")
+    vecs = {n: v for n, v in zip(names, np.eye(len(names), dtype=np.float32))}
+    calls = []
+
+    def fake_embed(items):
+        calls.append(len(items))
+        out = []
+        for it in items:
+            if it["text"].startswith("User goal:"):
+                assert it.get("image") == PIXEL
+                v = vecs["scissors"] + 0.5 * vecs["marker"]
+                out.append(v / np.linalg.norm(v))
+            else:
+                out.append(vecs[it["text"]])
+        return np.stack(out)
+
+    s = replace(load_settings(), encoder_tau=1.0)   # soft enough that small probs don't round to 0
+    encoder._cache.clear()
+    a = encoder.decide_encoder(s, d, "Cut along the line", PIXEL, embed=fake_embed)
+    b = encoder.decide_encoder(s, d, "Cut along the line", PIXEL, embed=fake_embed)
+    assert a.action == b.action == "TAKE_SCISSORS" and a.decider == "encoder"
+    assert a.concept == "scissors"
+    assert abs(sum(a.probs.values()) - 1) < 1e-3
+    assert a.probs["TAKE_SCISSORS"] > a.probs["TAKE_MARKER"] > a.probs["TAKE_STAPLER"]
+    assert calls == [len(names), 1, 1]       # candidates embedded once, then only the task
+
+
+def test_api_decide_both_and_capture(tmp_path, monkeypatch):
     import server.app as srv
     monkeypatch.setattr(srv, "CAPTURES", tmp_path / "captures")
     c = TestClient(app)
-    assert c.get("/api/status").json()["mock"] is True
-    r = c.post("/api/decide", json={"goal": "Label this box", "image": PIXEL}).json()
-    assert r["action"] == "TAKE_MARKER" and r["concept"] == "marker"
-    blind = c.post("/api/decide", json={"goal": "something odd", "image": None}).json()
-    assert blind["blind"] is True
+    st = c.get("/api/status").json()
+    assert st["mock"] is True and st["encoder"] and st["glimmer"]
+    r = c.post("/api/decide", json={"goal": "Label this box", "image": PIXEL, "decider": "both"}).json()
+    assert [d["decider"] for d in r["decisions"]] == ["encoder", "glimmer"]
+    assert all(d["action"] == "TAKE_MARKER" for d in r["decisions"])
+    assert r["decisions"][0]["probs"]["TAKE_MARKER"] == max(r["decisions"][0]["probs"].values())
+    blind = c.post("/api/decide", json={"goal": "something odd", "image": None, "decider": "glimmer"}).json()
+    assert blind["decisions"][0]["blind"] is True
     assert c.post("/api/decide", json={"goal": "x", "image": "not-a-data-url"}).status_code == 400
     saved = c.post("/api/capture", json={"goal": "Label this box", "image": PIXEL,
                                          "gold": ["TAKE_MARKER"]}).json()
     assert (tmp_path / saved["saved"]).exists()
     assert (tmp_path / "captures.jsonl").read_text().count("TAKE_MARKER") == 1
+
+
+def test_unconfigured_deciders_report_errors(monkeypatch):
+    for k in ("MOCK", "ENCODER_URL", "GLIMMER_API_KEY"):
+        monkeypatch.setenv(k, "0" if k == "MOCK" else "")
+    s = load_settings()
+    d = load_domain("desk")
+    assert not s.mock and not s.encoder_enabled and not s.glimmer_enabled
+    assert "not configured" in encoder.decide_encoder(s, d, "x", PIXEL).error
+    from server.decision import decide
+    assert "not configured" in decide(s, d, "x", PIXEL).error

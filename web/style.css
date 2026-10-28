@@ -43,8 +43,16 @@ select, input[type=text] {
 .check { color: var(--muted); font-size: 14px; white-space: nowrap; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chips button { font-size: 13px; padding: 5px 9px; border-radius: 99px; border: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; }
+.results { display: grid; gap: 10px; }
 .result { background: var(--panel); border-radius: 12px; padding: 12px; }
+.result .who { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
 .hint { font-size: 20px; font-weight: 600; }
+.probs { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 3px; font-size: 13px; }
+.probs li {
+  display: flex; justify-content: space-between; padding: 2px 6px; border-radius: 6px;
+  background: linear-gradient(90deg, rgba(244,200,74,.28) var(--p), transparent var(--p));
+}
+.probs li.top { color: var(--accent); }
 .hint.none { color: var(--warn); }
 .meta { color: var(--muted); font-size: 13px; }
 pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; color: var(--muted); max-height: 240px; overflow: auto; }
