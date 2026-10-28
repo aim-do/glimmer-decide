@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Glimmer Decide</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Glimmer Decide</h1>
+    <span id="status" class="pill">…</span>
+  </header>
+
+  <main>
+    <section class="stage">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="frame" hidden></canvas>
+      <div id="nocam" class="nocam" hidden>
+        Camera unavailable here. Upload a photo instead.
+      </div>
+    </section>
+
+    <section class="controls">
+      <div class="row">
+        <select id="domain"></select>
+        <label class="btn ghost">Photo<input id="file" type="file" accept="image/*" capture="environment" hidden></label>
+        <button id="live" class="btn ghost" hidden>Live</button>
+      </div>
+
+      <div class="row">
+        <input id="goal" type="text" placeholder="What do you want to do?" autocomplete="off">
+        <button id="mic" class="btn ghost" title="Speak the goal" hidden>🎤</button>
+      </div>
+      <div id="examples" class="chips"></div>
+
+      <div class="row">
+        <button id="decide" class="btn primary">What should I use?</button>
+        <label class="check"><input id="blind" type="checkbox"> blind (no image)</label>
+      </div>
+
+      <div id="result" class="result" hidden>
+        <div id="hint" class="hint"></div>
+        <div id="meta" class="meta"></div>
+        <details><summary>raw model output</summary><pre id="raw"></pre></details>
+      </div>
+
+      <details class="label-box">
+        <summary>Save sample for the eval set</summary>
+        <p class="meta">Tick every action that is correct for this frame and goal.</p>
+        <div id="gold" class="gold"></div>
+        <button id="save" class="btn ghost">Save frame + goal + label</button>
+        <span id="saved" class="meta"></span>
+      </details>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

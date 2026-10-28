@@ -1,0 +1,21 @@
+{
+  "id": "desk",
+  "title": "Desk: paper & packaging",
+  "objects": [
+    {"id": "binder_clip", "name": "binder clip", "hint": "Take the binder clip."},
+    {"id": "stapler", "name": "stapler", "hint": "Take the stapler."},
+    {"id": "tape", "name": "tape roll", "concept": "tape", "hint": "Take the tape."},
+    {"id": "marker", "name": "marker", "hint": "Take the marker."},
+    {"id": "scissors", "name": "scissors", "hint": "Take the scissors."},
+    {"id": "glue", "name": "glue stick", "hint": "Take the glue stick."},
+    {"id": "envelope", "name": "envelope", "hint": "Take the envelope."},
+    {"id": "box", "name": "cardboard box", "concept": "box", "hint": "Use the box."}
+  ],
+  "example_goals": [
+    "Temporarily hold these sheets together without punching holes or glue",
+    "Label this box",
+    "Cut the paper along a straight line",
+    "Seal the package shut",
+    "Mail a few documents"
+  ]
+}
