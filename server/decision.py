@@ -109,6 +109,9 @@ def decide(settings: Settings, domain: Domain, goal: str,
             "temperature": settings.glimmer_temperature,
             "top_p": 0.95,
         }
+        if "openrouter.ai" in settings.glimmer_base_url:
+            # Reasoning can't be disabled on hosted Glimmer, but effort shortens it.
+            body["reasoning"] = {"effort": settings.glimmer_reasoning}
         headers = {"Authorization": f"Bearer {settings.glimmer_api_key}"}
         own = client is None
         client = client or httpx.Client(timeout=120)
