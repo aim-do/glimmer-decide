@@ -72,6 +72,14 @@ class MetaEncoderService:
             pooler_config=PoolerConfig(pooling_type="LAST", use_activation=True),
         )
         self.lock = threading.Lock()
+        # Warm the text and vision paths at startup: without it the first camera frame
+        # after a cold start paid ~25 s of kernel JIT (seen 2026-10-28), the second 0.6 s.
+        from PIL import Image
+
+        frame = Image.new("RGB", (1024, 768), (127, 127, 127))
+        self.llm.embed([self.ve.to_prompt(self.processor, {"text": "warmup"}),
+                        self.ve.to_prompt(self.processor, {"text": "warmup", "image": frame})],
+                       tokenization_kwargs=self.ve.TOKENIZATION_KWARGS)
 
     def _embed(self, items: list[Item]) -> list:
         import base64

@@ -46,17 +46,24 @@ def put_secret(name: str, env: dict[str, str]) -> None:
 
 
 def cmd_secrets() -> None:
+    from dotenv import load_dotenv
     from huggingface_hub import HfApi, get_token
 
+    load_dotenv(ENV)   # HF_TOKEN may live in .env; get_token() reads it from the environment
     hf = get_token()
     if not hf:
-        sys.exit("No Hugging Face token. Run `hf auth login` (paste a read token there, not in chat).")
+        sys.exit("No Hugging Face token: set HF_TOKEN in .env or run `hf auth login`.")
     try:
         HfApi().auth_check("facebook/meta-encoder", token=hf)
+        print("HF access to facebook/meta-encoder: OK")
     except Exception as e:
-        sys.exit(f"HF token has no access to facebook/meta-encoder ({type(e).__name__}). "
-                 "Open https://huggingface.co/facebook/meta-encoder and accept the terms.")
-    print("HF access to facebook/meta-encoder: OK")
+        msg = (f"HF token has no access to facebook/meta-encoder ({type(e).__name__}). Accept the terms on "
+               "https://huggingface.co/facebook/meta-encoder and, for a fine-grained token, enable "
+               "'Read access to contents of all public gated repos you can access'.")
+        if "--force" not in sys.argv:
+            sys.exit(msg)
+        # Editing a fine-grained token's permissions keeps its value, so the secret stays valid.
+        print("WARNING: " + msg + " Writing the secret anyway (--force).")
     put_secret("huggingface", {"HF_TOKEN": hf})
 
     token = read_env().get("ENCODER_TOKEN") or secrets.token_urlsafe(32)
