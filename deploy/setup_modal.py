@@ -1,10 +1,13 @@
-"""One-time Modal setup for the MetaEncoder service. Never prints tokens.
+"""Modal setup for the MetaEncoder service. Never prints tokens.
 
-  python deploy/setup_modal.py secrets   # HF token (from `hf auth login`) + a fresh ENCODER_TOKEN -> Modal secrets, .env
+  python deploy/setup_modal.py secrets   # HF token (.env HF_TOKEN or `hf auth login`) + a fresh ENCODER_TOKEN -> Modal secrets, .env
   modal deploy deploy/modal_metaencoder.py
   python deploy/setup_modal.py url       # writes the deployed ENCODER_URL into .env
+  python deploy/setup_modal.py stop      # stop the GPU container now instead of waiting 5 idle minutes
 """
+import json
 import secrets
+import subprocess
 import sys
 from pathlib import Path
 
@@ -80,5 +83,16 @@ def cmd_url() -> None:
     print(f"ENCODER_URL={url}")
 
 
+def cmd_stop() -> None:
+    modal_cli = [sys.executable, "-m", "modal", "container"]
+    listing = subprocess.run(modal_cli + ["list", "--json"], capture_output=True, text=True, check=True)
+    ids = [c["container_id"] for c in json.loads(listing.stdout) if c.get("app_name") == APP]
+    for cid in ids:
+        # --yes: without a TTY the CLI aborts at its confirmation prompt.
+        subprocess.run(modal_cli + ["stop", "--yes", cid], check=False)
+    print(f"stopped {len(ids)} container(s) of {APP}")
+
+
 if __name__ == "__main__":
-    {"secrets": cmd_secrets, "url": cmd_url}.get(sys.argv[1] if len(sys.argv) > 1 else "", lambda: sys.exit(__doc__))()
+    {"secrets": cmd_secrets, "url": cmd_url, "stop": cmd_stop}.get(
+        sys.argv[1] if len(sys.argv) > 1 else "", lambda: sys.exit(__doc__))()

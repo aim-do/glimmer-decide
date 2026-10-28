@@ -88,6 +88,12 @@ def test_encoder_cosine_softmax_and_cache():
     assert a.probs["TAKE_SCISSORS"] > a.probs["TAKE_MARKER"] > a.probs["TAKE_STAPLER"]
     assert calls == [len(names), 1, 1]       # candidates embedded once, then only the task
 
+    seen = []
+    encoder.decide_encoder(s, d, "Cut along the line", None,
+                           embed=lambda items: seen.extend(items) or np.stack([vecs["scissors"]] * len(items)))
+    task = next(it for it in seen if it["text"].startswith("User goal:"))
+    assert "image" not in task and "(No camera frame is available.)" in task["text"]
+
 
 def test_api_decide_both_and_capture(tmp_path, monkeypatch):
     import server.app as srv

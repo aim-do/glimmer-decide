@@ -38,7 +38,7 @@ Criteria:
 
 | Step | What | State |
 |---|---|---|
-| 1 | MetaEncoder + Glimmer + SAM 3.1 on camera frames, no training; labeling UI; eval with blind ablation | code done; MetaEncoder needs the Modal deploy below |
+| 1 | MetaEncoder + Glimmer + SAM 3.1 on camera frames, no training; labeling UI; eval with blind ablation | done, MetaEncoder live on Modal; smoke-tested on 2 public photos |
 | 2 | Collect & label 100-300 frames on real desks; measure MetaEncoder vs Glimmer (accuracy, false pick when absent, latency) | next |
 | 3 | Adapt: Glimmer option-logit scoring + LoRA (Fireworks free SFT until 2026-11-30, or Modal), or a small head on frozen MetaEncoder features | |
 
@@ -76,8 +76,30 @@ modal deploy deploy/modal_metaencoder.py
 ```
 
 One H100 (80 GB, bf16 weights ~62 GB). The container stops after 5 idle minutes; the
-first request after that waits for a cold start (minutes). The web app pings
-`/api/warmup` on load to start it early. Both endpoints require the bearer token.
+first request after that waits for a cold start (~2 min once the weights are in the
+Volume; the very first start also downloads them, ~14 min). The web app pings
+`/api/warmup` on load to start it early, so opening the page starts paid GPU time.
+Both endpoints require the bearer token, but any request to the URL wakes the container
+before the token is checked. `python deploy/setup_modal.py stop` stops it at once.
+
+### First smoke test (2026-10-28, not an eval)
+
+Two public photos (a stationery desk, a paper shredder), H100 in us-east, client in Europe;
+latency is end to end from the laptop, MetaEncoder GPU time per frame is ~0.6 s.
+
+| Frame | Goal | MetaEncoder | Glimmer (reasoning) |
+|---|---|---|---|
+| stationery | Cut the paper along a straight line | scissors p=0.999, 3.3 s (first call, embeds the options) | scissors, 5.5 s |
+| stationery | Fasten these sheets together permanently | stapler p=0.999, 1.6 s | stapler, 2.9 s |
+| stationery | Label this box | marker p=0.9997, 1.7 s | marker, 3.6 s |
+| shredder | Cut the paper along a straight line | **none p=0.65** vs scissors 0.35, 1.9 s | none, 8.5 s |
+| no image | Cut the paper along a straight line | scissors p=0.995 (before the blind-note fix) | ask for view, 2.1 s |
+
+MetaEncoder is 2-4x faster here and agrees with Glimmer when the object is visible, but it
+refuses weakly: with the right object absent it said *none* by a thin margin, and with no
+image it still picked by the goal text. That is what the labeled eval set has to measure
+(false pick when absent) and what a calibrated threshold or a small trained head should fix.
+Probabilities use an uncalibrated tau=0.02.
 
 ### From a phone
 

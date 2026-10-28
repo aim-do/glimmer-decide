@@ -122,6 +122,9 @@ def decide_encoder(settings: Settings, domain: Domain, goal: str, image_data_url
         task = {"text": task_text(domain, goal)}
         if image_data_url is not None:
             task["image"] = image_data_url
+        else:
+            # Blind ablation: tell the encoder the frame is missing, as the Glimmer prompt does.
+            task["text"] = task["text"].replace("\n\nTask:", "\n(No camera frame is available.)\n\nTask:", 1)
         q = embed([task])[0]
     except (httpx.HTTPError, KeyError, ValueError) as e:
         detail = getattr(getattr(e, "response", None), "text", "")
