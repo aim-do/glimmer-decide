@@ -9,7 +9,8 @@ option. **SAM 3.1** then highlights the chosen object on the frame.
 ## Why
 
 Decision models answer by picking one option from a closed set in a single forward pass,
-instead of writing out their reasoning first: an answer in under a second instead of several.
+instead of writing out their reasoning first: the model itself needs ~0.15 s on the GPU, and
+the answer arrives in 1-1.5 s end to end instead of several seconds.
 The open-weight ones are new, and the released ones were trained mostly on text. This project
 has two goals:
 
@@ -28,13 +29,17 @@ Built for the Meta Global AI Developer Hackathon, on Meta models only.
 
 ## What's inside
 
-| Decider | Model | How it decides | Speed (end to end) | Where it runs |
+| Decider | Model | How it decides | Speed: end to end (GPU) | Where it runs |
 |---|---|---|---|---|
-| **MetaEncoder** (System 1, default) | [facebook/meta-encoder](https://huggingface.co/facebook/meta-encoder): Muse Glimmer 30B contrastively tuned into a bi-encoder ([paper](https://arxiv.org/abs/2610.11316)) | frame + goal and each option are embedded; cosine similarity -> softmax. Option embeddings are cached | ~1.7 s | your Modal GPU |
-| **JevAny** (System 1, **fine-tunable**) | [JevAny-Muse-Glimmer-30B](https://huggingface.co/SimpleJev/JevAny-Muse-Glimmer-30B-LoRA): a LoRA + pointer head on Muse Glimmer 30B ([JevAny](https://github.com/SimpleJev/JevAny)) | frame + goal + labelled options in one prefill; a small trained head scores the options | ~0.7 s | your Modal GPU |
+| **MetaEncoder** (System 1, default) | [facebook/meta-encoder](https://huggingface.co/facebook/meta-encoder): Muse Glimmer 30B contrastively tuned into a bi-encoder ([paper](https://arxiv.org/abs/2610.11316)) | frame + goal and each option are embedded; cosine similarity -> softmax. Option embeddings are cached | ~1.4 s (0.15 s) | your Modal GPU |
+| **JevAny** (System 1, **fine-tunable**) | [JevAny-Muse-Glimmer-30B](https://huggingface.co/SimpleJev/JevAny-Muse-Glimmer-30B-LoRA): a LoRA + pointer head on Muse Glimmer 30B ([JevAny](https://github.com/SimpleJev/JevAny)) | frame + goal + labelled options in one prefill; a small trained head scores the options | ~1.4 s (0.17 s) | your Modal GPU |
 | **Clef-style Glimmer** (System 1, **trained from scratch**, experiment) | [Clef](https://huggingface.co/Cloudflare/clef)'s joint schema head + a fresh LoRA on Muse Glimmer 30B | one prefill; the head scores all options together | — (training only, not in the page yet) | your Modal GPU |
 | **Glimmer** (System 2, compare) | [Muse Glimmer 30B](https://huggingface.co/meta-models/Muse-Glimmer-30B) | reasons, then answers `ANSWER: <letter>` | 3–9 s | OpenRouter |
 | Highlight | SAM 3.1 | text concept -> boxes | | Meta Model API |
+
+Speeds are medians on the same 1024×768 camera frames, from a laptop in Europe to warm H100s in
+us-east: the models take ~0.15 s, the rest is the network and Modal's routing (see
+[Results so far](#results-so-far)).
 
 ```
 camera frame ─┐                       ┌─► MetaEncoder: cos(task, option_i) ─► softmax ─► choice + p
@@ -92,7 +97,7 @@ saved frames + right answers ─► fine-tune JevAny / train a Clef-style head �
    time, each browser warns about the self-signed certificate: *Advanced → Proceed*
    (iPhone: *Show Details → visit this website*). Then the phone camera works.
 
-5. **GPUs:** press **Start** in the *MetaEncoder GPU* (or *JevAny GPU*) panel and wait ~1-3 min;
+5. **GPUs:** press **Start** in the *MetaEncoder GPU* (or *JevAny GPU*) panel and wait ~1-2 min;
    press **Stop** when you are done. Each GPU costs ~$4/h while on and sleeps after 5 idle minutes.
 
 6. **Train on your own frames (optional):** save labelled frames in the page, then
@@ -127,8 +132,8 @@ The page picks up the new `.env` values without a restart. What ends up in your 
 
 Operating the services:
 
-- **Start** in the page = `modal deploy` plus a warm-up call; later starts take ~1-3 min
-  (JevAny ~1 min). **Stop** shuts the GPU down and undeploys the app, so nothing can wake it
+- **Start** in the page = `modal deploy` plus a warm-up call; later starts take ~1-2 min
+  (both were ready 105 s after Start). **Stop** shuts the GPU down and undeploys the app, so nothing can wake it
   and bill. Idle GPUs also sleep after 5 minutes. From a terminal:
 
   ```bash
@@ -282,8 +287,24 @@ limits. The server listens on localhost only by default, because every request s
 | 2 | Collect & label 100-300 frames on real desks; measure the deciders (accuracy, false pick when absent, latency) | next |
 | 3 | Train: fine-tune JevAny on the labeled frames; Clef-style head from scratch as an experiment | code and one-frame GPU tests done (2026-11-04); waits for labeled frames |
 
+**Speed on the same frames (2026-11-04).** Both GPUs warm (ready 105 s after Start), asked
+through the local server exactly as the page asks, 3 goals × 2 runs per frame, medians; the
+frame is a desk picture sent as the page sends it (JPEG, 1024×768) or a small 320×240 frame.
+"GPU" is the time the service itself reports for the model.
+
+| Frame | MetaEncoder: end to end / GPU | JevAny: end to end / GPU |
+|---|---|---|
+| desk, 1024×768 | 1.43 s / 0.15 s | 1.45 s / 0.17 s |
+| small, 320×240 | 1.06 s / 0.06 s | 1.10 s / 0.11 s |
+
+On the same frames the two decision models are equally fast, and the models are the small
+part: a round trip from the laptop (Europe) to each service in us-east alone takes ~0.18-0.20 s,
+and connection setup, the upload and Modal's routing make up the rest of the ~1.3 s. Both gave
+the same answers on the desk frame (scissors, stapler, marker); on the small frame with no desk
+object MetaEncoder said *none* for 2 of the 3 goals, JevAny for 1.
+
 **MetaEncoder vs Glimmer (2026-10-28, two public photos, not an eval).** H100 in us-east,
-client in Europe; latency end to end from the laptop, MetaEncoder GPU time per frame ~0.6 s.
+client in Europe; latency end to end from the laptop.
 
 | Frame | Goal | MetaEncoder | Glimmer (reasoning) |
 |---|---|---|---|
@@ -297,10 +318,9 @@ MetaEncoder is 2-4x faster and agrees with Glimmer when the object is visible, b
 weakly: with the right object absent it said *none* by a thin margin, and with no image it still
 picked by the goal text.
 
-**JevAny live (2026-11-04).** Start to ready in 56 s; answers in 0.70-0.76 s end to end
-(130-190 ms of GPU time). On a grey frame with no desk object it still picks by the goal text
-(scissors 0.88 for *cut the paper*): the released adapter never saw images, the reason to
-fine-tune on frames.
+**JevAny live (2026-11-04).** On a grey frame with no desk object it still picks by the goal
+text (scissors 0.88 for *cut the paper*): the released adapter was trained on text decisions,
+the reason to fine-tune it on frames.
 
 **Training smoke tests (2026-11-04, H100, one generated frame, answer *none*).** Fine-tuning
 JevAny: loss 2.34 → 1.10 → 0.06 → 0.00, scissors 0.88 → none 1.00, peak GPU memory 58 GB,

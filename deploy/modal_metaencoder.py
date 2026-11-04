@@ -9,6 +9,7 @@ Serving follows the vLLM recipe on the model card: pooling runner, last-token po
 L2-normalised embeddings, the repo's vllm_metaencoder.py for prompt building.
 """
 import os
+import time
 from typing import Any
 
 import modal
@@ -129,8 +130,11 @@ class MetaEncoderService:
             check(authorization)
             if any(it.image and not it.image.startswith("data:image/") for it in req.items):
                 raise HTTPException(400, "image must be a data URL")
+            t0 = time.perf_counter()
             vecs = [np.asarray(v, dtype=np.float32) for v in self._embed(req.items)]
             return {"dim": int(vecs[0].shape[0]),
-                    "embeddings": [base64.b64encode(v.tobytes()).decode() for v in vecs]}
+                    "embeddings": [base64.b64encode(v.tobytes()).decode() for v in vecs],
+                    # Model time in the container (image decode + embedding), like JevAny's latency_ms.
+                    "latency_ms": int((time.perf_counter() - t0) * 1000)}
 
         return api
