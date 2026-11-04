@@ -64,7 +64,7 @@ def ensure_cert(ips: list[str], cert_dir: Path | None = None) -> tuple[Path, Pat
 
 
 def _now() -> dt.datetime:
-    return dt.datetime.now(dt.timezone.utc)
+    return dt.datetime.now(dt.UTC)
 
 
 def _write_self_signed(ips: list[str], cert_path: Path, key_path: Path) -> None:

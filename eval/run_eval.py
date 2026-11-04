@@ -29,8 +29,9 @@ load_dotenv(ROOT / ".env")
 from server.config import load_settings  # noqa: E402
 from server.decision import decide  # noqa: E402
 from server.encoder import decide_encoder  # noqa: E402
-from server.jevany import MODEL_ID as JEVANY_MODEL, decide_jevany  # noqa: E402
-from server.tasks import ASK_VIEW, NONE, load_domain  # noqa: E402
+from server.jevany import MODEL_ID as JEVANY_MODEL  # noqa: E402
+from server.jevany import decide_jevany  # noqa: E402
+from server.tasks import ASK_VIEW, NONE, Domain, load_domain  # noqa: E402
 
 DECIDERS = {"encoder": decide_encoder, "jevany": decide_jevany, "glimmer": decide}
 
@@ -80,7 +81,7 @@ def summarize(rows: list[dict]) -> dict:
 def run_one(settings, decider: str, records: list[dict], data_path: Path,
             blind: bool, repeats: int) -> Path:
     decide_fn = DECIDERS[decider]
-    domains: dict[str, object] = {}
+    domains: dict[str, Domain] = {}
     rows = []
     for i, rec in enumerate(records):
         img_path = data_path.parent / rec["image"]

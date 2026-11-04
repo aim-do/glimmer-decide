@@ -9,6 +9,7 @@ Serving follows the vLLM recipe on the model card: pooling runner, last-token po
 L2-normalised embeddings, the repo's vllm_metaencoder.py for prompt building.
 """
 import os
+from typing import Any
 
 import modal
 from pydantic import BaseModel, Field
@@ -89,7 +90,7 @@ class MetaEncoderService:
 
         prepared = []
         for it in items:
-            d = {}
+            d: dict[str, Any] = {}
             if it.text:
                 d["text"] = it.text
             if it.image:

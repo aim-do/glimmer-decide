@@ -13,8 +13,8 @@ import pytest
 import server.encoder_ctl as ctl
 import server.jevany as jevany
 from server.tasks import load_domain
-from train.jevany_data import captures_dataset, from_records, smoke_dataset, smoke_png
 from tests.test_jevany import LIVE, PIXEL, URL, fake_post
+from train.jevany_data import captures_dataset, from_records, smoke_dataset, smoke_png
 
 DEPLOY = Path(__file__).resolve().parent.parent / "deploy"
 

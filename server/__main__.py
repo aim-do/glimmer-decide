@@ -14,6 +14,7 @@ import shutil
 import threading
 import webbrowser
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
@@ -73,7 +74,7 @@ def main(argv: list[str] | None = None) -> None:
         from .certs import lan_ips
 
         lan = lan_ips() if host in ALL_INTERFACES else [host] if _is_ip(host) else []
-    tls: dict[str, str] = {}
+    tls: dict[str, Any] = {}
     if args.https:
         from .certs import ensure_cert
 

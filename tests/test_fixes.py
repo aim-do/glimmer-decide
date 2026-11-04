@@ -104,6 +104,7 @@ def test_encoder_near_tie_asks_for_another_view():
 
 def test_public_error_shows_status_not_body():
     import httpx
+
     from server.types import public_error
     req = httpx.Request("POST", "https://example.invalid")
     resp = httpx.Response(401, request=req, text="secret detail")
