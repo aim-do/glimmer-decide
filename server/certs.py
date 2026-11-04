@@ -1,6 +1,6 @@
 """Self-signed HTTPS certificate so phones on the same Wi-Fi can use the camera.
 
-Browsers give a page the camera only over HTTPS (or on localhost). `python -m server --https`
+Browsers give a page the camera only over HTTPS (or on localhost). `python -m server --phone`
 serves the app with a certificate made here for this machine's network addresses. The phone
 warns about it once; after "Proceed" the page counts as secure and the camera works.
 """

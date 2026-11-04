@@ -79,14 +79,40 @@ def run_launcher(monkeypatch, tmp_path, argv):
     return calls
 
 
-def test_https_flag_listens_on_the_network_with_tls(monkeypatch, tmp_path, capsys):
-    calls = run_launcher(monkeypatch, tmp_path, ["--https"])
+def test_phone_flag_serves_the_wifi_over_tls_and_tells_the_address(monkeypatch, tmp_path, capsys):
+    from server.app import app
+
+    calls = run_launcher(monkeypatch, tmp_path, ["--phone"])
     assert calls["host"] == "0.0.0.0"
     assert "192.168.1.50" in san_ips(load(Path(calls["ssl_certfile"])))
     assert Path(calls["ssl_keyfile"]).exists()
-    assert "https://192.168.1.50:8000" in capsys.readouterr().out
+    assert app.state.phone_url == "https://192.168.1.50:8000"
+    out = capsys.readouterr().out
+    assert "Phone (same Wi-Fi):  https://192.168.1.50:8000" in out
+    assert "This computer:       https://localhost:8000" in out
 
 
-def test_default_stays_on_localhost_without_tls(monkeypatch, tmp_path):
+def test_https_is_an_alias_of_phone(monkeypatch, tmp_path):
+    calls = run_launcher(monkeypatch, tmp_path, ["--https"])
+    assert calls["host"] == "0.0.0.0" and "ssl_certfile" in calls
+
+
+def test_default_stays_on_localhost_and_says_how_to_add_a_phone(monkeypatch, tmp_path, capsys):
+    from server.app import app
+
     calls = run_launcher(monkeypatch, tmp_path, [])
     assert calls["host"] == "127.0.0.1" and "ssl_certfile" not in calls
+    assert app.state.phone_url is None
+    assert "python -m server --phone" in capsys.readouterr().out
+
+
+def test_status_tells_the_page_the_phone_address():
+    from fastapi.testclient import TestClient
+
+    from server.app import app
+
+    app.state.phone_url = "https://192.168.1.50:8000"
+    try:
+        assert TestClient(app).get("/api/status").json()["phone_url"] == "https://192.168.1.50:8000"
+    finally:
+        app.state.phone_url = None

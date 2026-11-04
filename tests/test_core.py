@@ -102,7 +102,7 @@ def test_api_decide_both_and_capture(tmp_path, monkeypatch):
     st = c.get("/api/status").json()
     assert st["mock"] is True and st["encoder"] and st["glimmer"]
     r = c.post("/api/decide", json={"goal": "Label this box", "image": PIXEL, "decider": "both"}).json()
-    assert [d["decider"] for d in r["decisions"]] == ["encoder", "glimmer"]
+    assert [d["decider"] for d in r["decisions"]] == ["encoder", "jevany", "glimmer"]   # every configured one
     assert all(d["action"] == "TAKE_MARKER" for d in r["decisions"])
     assert r["decisions"][0]["probs"]["TAKE_MARKER"] == max(r["decisions"][0]["probs"].values())
     blind = c.post("/api/decide", json={"goal": "something odd", "image": None, "decider": "glimmer"}).json()
@@ -115,11 +115,13 @@ def test_api_decide_both_and_capture(tmp_path, monkeypatch):
 
 
 def test_unconfigured_deciders_report_errors(monkeypatch):
-    for k in ("MOCK", "ENCODER_URL", "GLIMMER_API_KEY"):
+    for k in ("MOCK", "ENCODER_URL", "JEVANY_URL", "GLIMMER_API_KEY"):
         monkeypatch.setenv(k, "0" if k == "MOCK" else "")
     s = load_settings()
     d = load_domain("desk")
-    assert not s.mock and not s.encoder_enabled and not s.glimmer_enabled
+    assert not s.mock and not s.encoder_enabled and not s.jevany_enabled and not s.glimmer_enabled
     assert "not configured" in encoder.decide_encoder(s, d, "x", PIXEL).error
     from server.decision import decide
+    from server.jevany import decide_jevany
     assert "not configured" in decide(s, d, "x", PIXEL).error
+    assert "not configured" in decide_jevany(s, d, "x", PIXEL).error

@@ -2,8 +2,9 @@
 
 Usage:
   python -m eval.run_eval --decider encoder   # MetaEncoder, frame + goal
+  python -m eval.run_eval --decider jevany    # JevAny decision head on Muse Glimmer 30B
   python -m eval.run_eval --decider glimmer   # generative Glimmer with reasoning
-  python -m eval.run_eval --decider both      # both deciders, one output file each
+  python -m eval.run_eval --decider both      # every configured decider, one output file each
   python -m eval.run_eval --decider encoder --blind   # goal only (camera ablation)
   python -m eval.run_eval --data data/my.jsonl --repeats 3
 
@@ -28,9 +29,10 @@ load_dotenv(ROOT / ".env")
 from server.config import load_settings  # noqa: E402
 from server.decision import decide  # noqa: E402
 from server.encoder import decide_encoder  # noqa: E402
+from server.jevany import MODEL_ID as JEVANY_MODEL, decide_jevany  # noqa: E402
 from server.tasks import ASK_VIEW, NONE, load_domain  # noqa: E402
 
-DECIDERS = {"encoder": decide_encoder, "glimmer": decide}
+DECIDERS = {"encoder": decide_encoder, "jevany": decide_jevany, "glimmer": decide}
 
 
 def data_url(path: Path) -> str:
@@ -103,8 +105,9 @@ def run_one(settings, decider: str, records: list[dict], data_path: Path,
 
     summary = summarize(rows)
     summary.update(decider=decider, blind=blind, mock=settings.mock, data=str(data_path),
-                   model=("facebook/meta-encoder" if decider == "encoder" else settings.glimmer_model),
-                   reasoning=(None if decider == "encoder" else settings.glimmer_reasoning),
+                   model={"encoder": "facebook/meta-encoder", "jevany": JEVANY_MODEL}.get(
+                       decider, settings.glimmer_model),
+                   reasoning=(settings.glimmer_reasoning if decider == "glimmer" else None),
                    encoder_style=(settings.encoder_style if decider == "encoder" else None))
     out_dir = ROOT / "eval" / "results"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -139,7 +142,11 @@ def main() -> None:
     if not records:
         raise SystemExit(f"no labeled records in {data_path}")
 
-    for name in (["encoder", "glimmer"] if decider == "both" else [decider]):
+    names = ([n for n in ("encoder", "jevany", "glimmer") if settings.enabled(n)]
+             if decider == "both" else [decider])
+    if not names:
+        raise SystemExit("no decider is configured (see README: keys in .env)")
+    for name in names:
         run_one(settings, name, records, data_path, args.blind, args.repeats)
 
 

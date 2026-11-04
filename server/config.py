@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-DECIDERS = ("encoder", "glimmer", "both")
+DECIDERS = ("encoder", "jevany", "glimmer", "both")   # "both" = compare every configured decider
 ENCODER_STYLES = ("label", "label_detail")
 REASONING_LEVELS = ("low", "medium", "high", "xhigh")
 
@@ -47,7 +47,7 @@ class Settings:
     meta_base_url: str
     meta_api_key: str
     sam_model: str
-    # Which decider answers by default: encoder | glimmer | both.
+    # Which decider answers by default: encoder | jevany | glimmer | both (= every configured one).
     decider: str
     # MOCK=1 -> no network calls, deterministic fake decisions (UI/dev/tests). Never implicit.
     mock: bool
@@ -55,10 +55,21 @@ class Settings:
     encoder_min_margin: float = 0.05
     # Hard deadline for one /api/decide call, seconds.
     request_timeout_s: float = 240.0
+    # JevAny (decision head on Muse Glimmer 30B): our own GPU service (deploy/modal_jevany.py),
+    # behind the same ENCODER_TOKEN as MetaEncoder.
+    jevany_url: str = ""
 
     @property
     def encoder_enabled(self) -> bool:
         return self.mock or bool(self.encoder_url)
+
+    @property
+    def jevany_enabled(self) -> bool:
+        return self.mock or bool(self.jevany_url)
+
+    def enabled(self, decider: str) -> bool:
+        return {"encoder": self.encoder_enabled, "jevany": self.jevany_enabled,
+                "glimmer": self.glimmer_enabled}.get(decider, False)
 
     @property
     def glimmer_enabled(self) -> bool:
@@ -95,7 +106,8 @@ def load_settings() -> Settings:
     timeout_s = _float("REQUEST_TIMEOUT_S", "240")
     if timeout_s <= 0:
         raise ValueError(f"REQUEST_TIMEOUT_S must be > 0, got {timeout_s}")
-    for name, url in (("ENCODER_URL", encoder_url),
+    jevany_url = _env("JEVANY_URL").rstrip("/")
+    for name, url in (("ENCODER_URL", encoder_url), ("JEVANY_URL", jevany_url),
                       ("GLIMMER_BASE_URL", _env("GLIMMER_BASE_URL", "https://openrouter.ai/api/v1")),
                       ("META_BASE_URL", _env("META_BASE_URL", "https://api.meta.ai/v1"))):
         if url and not url.startswith(("https://", "http://localhost", "http://127.0.0.1")):
@@ -118,4 +130,5 @@ def load_settings() -> Settings:
         mock=_env("MOCK", "0") == "1",
         encoder_min_margin=margin,
         request_timeout_s=timeout_s,
+        jevany_url=jevany_url,
     )

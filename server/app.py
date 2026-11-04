@@ -1,7 +1,7 @@
 """HTTP server: serves the camera web app, the decision API and MetaEncoder GPU control.
 
 Run:  python -m server            (or: python -m uvicorn server.app:app --host 127.0.0.1 --port 8000)
-(localhost by default: the API spends paid credits; phones: `python -m server --https` on the
+(localhost by default: the API spends paid credits; phones: `python -m server --phone` on the
 same Wi-Fi, or `tailscale serve`).
 """
 from __future__ import annotations
@@ -34,7 +34,8 @@ load_dotenv(ROOT / ".env")
 from .config import DECIDERS as DECIDER_NAMES, load_settings  # noqa: E402
 from .decision import decide  # noqa: E402
 from .encoder import decide_encoder  # noqa: E402
-from .encoder_ctl import ControlError, EncoderControl  # noqa: E402
+from .encoder_ctl import SERVICES, ControlError, EncoderControl  # noqa: E402
+from .jevany import decide_jevany  # noqa: E402
 from .sam import segment  # noqa: E402
 from .tasks import list_domains, load_domain  # noqa: E402
 from .types import finish  # noqa: E402
@@ -45,30 +46,41 @@ log = logging.getLogger("glimmer-decide")
 settings = load_settings()
 CAPTURES = ROOT / "data" / "captures"
 DATA_URL_RE = re.compile(r"^data:image/(jpeg|png|webp);base64,")
-DECIDERS = {"encoder": decide_encoder, "glimmer": decide}
+DECIDERS = {"encoder": decide_encoder, "jevany": decide_jevany, "glimmer": decide}
 MAX_IMAGE_CHARS = 8_000_000
 MAX_IMAGE_BYTES = 5_000_000
 RATE_LIMITS = {"/api/decide": (30, 60.0), "/api/warmup": (3, 60.0), "/api/capture": (60, 60.0),
-               "/api/encoder/start": (6, 60.0), "/api/encoder/stop": (12, 60.0)}
+               "/api/encoder/start": (6, 60.0), "/api/encoder/stop": (12, 60.0),
+               **{f"/api/gpu/{k}/{op}": (6 if op == "start" else 12, 60.0)
+                  for k in ("encoder", "jevany") for op in ("start", "stop")}}
 UI_HEADER = ("x-requested-with", "glimmer-decide")
 
 
-def _reload_encoder_env() -> None:
-    """Pick up ENCODER_URL/ENCODER_TOKEN that deploy/setup_modal.py wrote while the server ran."""
+def _reload_service_env() -> None:
+    """Pick up ENCODER_URL / JEVANY_URL / ENCODER_TOKEN that deploy/setup_modal.py wrote while
+    the server ran, so the page works without a restart."""
     global settings
     vals = dotenv_values(ROOT / ".env")
-    url = (vals.get("ENCODER_URL") or "").strip().rstrip("/")
     token = (vals.get("ENCODER_TOKEN") or "").strip()
-    if url.startswith("https://") and token and (url, token) != (settings.encoder_url, settings.encoder_token):
-        settings = replace(settings, encoder_url=url, encoder_token=token)
-        log.info("MetaEncoder endpoint loaded from .env: %s", url)
+    if not token:
+        return
+    changes = {}
+    for key, field in (("ENCODER_URL", "encoder_url"), ("JEVANY_URL", "jevany_url")):
+        url = (vals.get(key) or "").strip().rstrip("/")
+        if url.startswith("https://") and url != getattr(settings, field):
+            changes[field] = url
+    if changes or token != settings.encoder_token:
+        settings = replace(settings, encoder_token=token, **changes)
+        log.info("GPU service endpoints loaded from .env: %s", ", ".join(changes) or "token")
 
 
-encoder_ctl = EncoderControl(lambda: settings, _reload_encoder_env)
+_reload_encoder_env = _reload_service_env   # earlier name
+gpus = {key: EncoderControl(lambda: settings, _reload_service_env, service=svc) for key, svc in SERVICES.items()}
+encoder_ctl = gpus["encoder"]
 
 def _quiet_client_resets(loop, context) -> None:
     """Windows' Proactor loop reports a browser resetting a finished keep-alive TLS connection as an
-    ERROR with a traceback (every status poll under --https). The request already succeeded: drop it."""
+    ERROR with a traceback (every status poll under --phone). The request already succeeded: drop it."""
     if isinstance(context.get("exception"), ConnectionResetError):
         return
     loop.default_exception_handler(context)
@@ -121,7 +133,7 @@ class DecideRequest(BaseModel):
     domain: str = "desk"
     goal: str = Field(min_length=1, max_length=500)
     image: str | None = Field(default=None, max_length=MAX_IMAGE_CHARS)
-    decider: Literal["encoder", "glimmer", "both"] | None = None
+    decider: Literal["encoder", "jevany", "glimmer", "both"] | None = None
     highlight: bool = True
 
     @field_validator("goal", mode="after")
@@ -183,30 +195,54 @@ def _require_ui(request: Request) -> None:
 @app.get("/api/status")
 def status():
     return {"mock": settings.mock, "default_decider": settings.decider,
-            "encoder": settings.encoder_enabled, "glimmer": settings.glimmer_enabled,
-            "model": settings.glimmer_model, "sam": settings.sam_enabled}
+            "encoder": settings.encoder_enabled, "jevany": settings.jevany_enabled,
+            "glimmer": settings.glimmer_enabled,
+            "model": settings.glimmer_model, "sam": settings.sam_enabled,
+            "phone_url": getattr(app.state, "phone_url", None)}   # set by python -m server --phone
 
 
+def _gpu(name: str) -> EncoderControl:
+    if name not in gpus:
+        raise HTTPException(404, f"unknown GPU service {name!r}")
+    return gpus[name]
+
+
+@app.get("/api/gpu/{name}")
+def gpu_status(name: str):
+    """GPU service state (MetaEncoder, JevAny) for the page's Start/Stop panels."""
+    return _gpu(name).status()
+
+
+@app.post("/api/gpu/{name}/start", dependencies=[Depends(_require_ui)])
+def gpu_start(name: str):
+    try:
+        return _gpu(name).start()
+    except ControlError as e:
+        raise HTTPException(e.status, str(e)) from None
+
+
+@app.post("/api/gpu/{name}/stop", dependencies=[Depends(_require_ui)])
+def gpu_stop(name: str):
+    try:
+        return _gpu(name).stop()
+    except ControlError as e:
+        raise HTTPException(e.status, str(e)) from None
+
+
+# The MetaEncoder-only routes of the first version.
 @app.get("/api/encoder")
 def encoder_status():
-    """MetaEncoder GPU state for the page's Start/Stop panel."""
-    return encoder_ctl.status()
+    return gpu_status("encoder")
 
 
 @app.post("/api/encoder/start", dependencies=[Depends(_require_ui)])
 def encoder_start():
-    try:
-        return encoder_ctl.start()
-    except ControlError as e:
-        raise HTTPException(e.status, str(e)) from None
+    return gpu_start("encoder")
 
 
 @app.post("/api/encoder/stop", dependencies=[Depends(_require_ui)])
 def encoder_stop():
-    try:
-        return encoder_ctl.stop()
-    except ControlError as e:
-        raise HTTPException(e.status, str(e)) from None
+    return gpu_stop("encoder")
 
 
 @app.post("/api/warmup", dependencies=[Depends(_require_ui)])
@@ -254,7 +290,10 @@ def api_decide(req: DecideRequest):
     which = req.decider or settings.decider
     if which not in DECIDER_NAMES:
         raise HTTPException(400, f"unknown decider {which!r}")
-    names = ["encoder", "glimmer"] if which == "both" else [which]
+    # "both" compares every configured decider (fast ones first); a single one may be unconfigured
+    # and then answers with a clear error instead of silently switching models.
+    names = ([n for n in ("encoder", "jevany", "glimmer") if settings.enabled(n)] or ["glimmer"]
+             if which == "both" else [which])
     futures = [pool.submit(DECIDERS[n], settings, dom, req.goal, req.image) for n in names]
     # One shared deadline for the whole request, not one per decider. Answers
     # that already finished are kept; only the stragglers become errors.

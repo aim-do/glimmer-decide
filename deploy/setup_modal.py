@@ -1,9 +1,10 @@
-"""Set up and operate the MetaEncoder GPU service on your own Modal account. Never prints tokens.
+"""Set up and operate the GPU services (MetaEncoder, JevAny) on your own Modal account. Never prints tokens.
 
-  python deploy/setup_modal.py all       # one-time setup: login, secrets, deploy, write ENCODER_URL/TOKEN to .env
-  python deploy/setup_modal.py status    # deployed? GPU containers running?
-  python deploy/setup_modal.py start     # deploy (the web page's Start button also warms the GPU)
-  python deploy/setup_modal.py stop      # stop the GPU and undeploy: nothing can wake it or bill
+  python deploy/setup_modal.py all       # one-time MetaEncoder setup: login, secrets, deploy, ENCODER_URL/TOKEN in .env
+  python deploy/setup_modal.py jevany    # one-time JevAny setup: deploy, ~60 GB of weights on a CPU box, JEVANY_URL
+  python deploy/setup_modal.py status    # deployed? GPU containers running? (both services)
+  python deploy/setup_modal.py start [encoder|jevany]   # deploy (the page's Start button also warms the GPU)
+  python deploy/setup_modal.py stop      # stop both GPUs and undeploy: nothing can wake them or bill
 
 Steps of `all`, also runnable one by one:
   login     `modal token new` in the browser if this machine has no Modal token yet
@@ -23,6 +24,9 @@ ROOT = Path(__file__).resolve().parent.parent
 ENV = ROOT / ".env"
 DEPLOY_FILE = ROOT / "deploy" / "modal_metaencoder.py"
 APP, CLS = "glimmer-decide-metaencoder", "MetaEncoderService"
+JEVANY_FILE = ROOT / "deploy" / "modal_jevany.py"
+JEVANY_APP, JEVANY_CLS = "glimmer-decide-jevany", "JevAnyService"
+APPS = (APP, JEVANY_APP)
 CLI_ENV = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
 
 
@@ -120,17 +124,56 @@ def cmd_status() -> None:
     r = modal_cli("app", "list", "--json", capture=True)
     if r.returncode != 0:
         sys.exit(r.stderr or r.stdout)
-    mine = [a for a in json.loads(r.stdout or "[]") if a.get("description") == APP and a.get("state") == "deployed"]
-    gpus = sum(int(a.get("tasks") or 0) for a in mine)
-    print(f"{APP}: {'deployed' if mine else 'not deployed (stopped)'}, GPU containers running: {gpus}")
+    listed = json.loads(r.stdout or "[]")
+    for app in APPS:
+        mine = [a for a in listed if a.get("description") == app and a.get("state") == "deployed"]
+        gpus = sum(int(a.get("tasks") or 0) for a in mine)
+        print(f"{app}: {'deployed' if mine else 'not deployed (stopped)'}, GPU containers running: {gpus}")
 
 
 def cmd_stop() -> None:
-    r = modal_cli("app", "stop", "--yes", APP, capture=True)
-    out = (r.stdout + r.stderr).strip()
-    if r.returncode != 0 and not any(s in out.lower() for s in ("already stopped", "not found", "could not find")):
-        sys.exit(out or "modal app stop failed")
-    print(out or f"{APP} stopped")
+    for app in APPS:
+        r = modal_cli("app", "stop", "--yes", app, capture=True)
+        out = (r.stdout + r.stderr).strip()
+        if r.returncode != 0 and not any(s in out.lower() for s in ("already stopped", "not found", "could not find")):
+            sys.exit(out or f"modal app stop {app} failed")
+        print(out or f"{app} stopped")
+
+
+def cmd_start() -> None:
+    which = sys.argv[2] if len(sys.argv) > 2 else "encoder"
+    files = {"encoder": DEPLOY_FILE, "jevany": JEVANY_FILE}
+    if which not in files:
+        sys.exit("usage: python deploy/setup_modal.py start [encoder|jevany]")
+    if modal_cli("deploy", str(files[which])).returncode != 0:
+        sys.exit("modal deploy failed (see above).")
+
+
+def ensure_service_token() -> None:
+    """The bearer token both GPU services check; created here if `all` never ran."""
+    token = read_env().get("ENCODER_TOKEN")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        set_env("ENCODER_TOKEN", token)
+    put_secret("glimmer-decide-auth", {"ENCODER_TOKEN": token})
+
+
+def cmd_jevany() -> None:
+    ensure_env_file()
+    cmd_login()
+    ensure_service_token()
+    if modal_cli("deploy", str(JEVANY_FILE)).returncode != 0:
+        sys.exit("modal deploy failed (see above).")
+    print("Downloading the JevAny weights (~60 GB: Muse Glimmer 30B + the adapter) into a Modal Volume\n"
+          "on a cheap CPU container, so the GPU never waits for them. This takes ~10-20 min, once.")
+    if modal_cli("run", f"{JEVANY_FILE}::download").returncode != 0:
+        sys.exit("weight download failed (see above); rerun `python deploy/setup_modal.py jevany`.")
+    import modal
+
+    url = modal.Cls.from_name(JEVANY_APP, JEVANY_CLS)().web.get_web_url()
+    set_env("JEVANY_URL", url)
+    print(f"JEVANY_URL={url}")
+    print("\nDone. Pick JevAny in the page and press Start in its GPU panel (~3 min, ~$4/h until Stop).")
 
 
 def cmd_all() -> None:
@@ -141,11 +184,12 @@ def cmd_all() -> None:
     cmd_url()
     print("\nDone. Run `python -m server`, then use Start/Stop in the page's MetaEncoder panel.\n"
           "The GPU runs only after Start (or a MetaEncoder request); it sleeps after 5 idle minutes,\n"
-          "and Stop shuts it down completely.")
+          "and Stop shuts it down completely. JevAny, the second fast decider: "
+          "`python deploy/setup_modal.py jevany`.")
 
 
-COMMANDS = {"all": cmd_all, "login": cmd_login, "secrets": cmd_secrets, "deploy": cmd_deploy,
-            "start": cmd_deploy, "url": cmd_url, "status": cmd_status, "stop": cmd_stop}
+COMMANDS = {"all": cmd_all, "jevany": cmd_jevany, "login": cmd_login, "secrets": cmd_secrets,
+            "deploy": cmd_deploy, "start": cmd_start, "url": cmd_url, "status": cmd_status, "stop": cmd_stop}
 
 if __name__ == "__main__":
     from dotenv import load_dotenv

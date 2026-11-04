@@ -45,7 +45,12 @@ select, input[type=text] {
 .chips button { font-size: 13px; padding: 5px 9px; border-radius: 99px; border: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; }
 .results { display: grid; gap: 10px; }
 .result { background: var(--panel); border-radius: 12px; padding: 12px; }
-.result .who { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.result .who { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.result .who .time { text-transform: none; letter-spacing: 0; color: var(--text); font-variant-numeric: tabular-nums; }
+.took { margin: 0; font-size: 14px; color: var(--text); font-variant-numeric: tabular-nums; }
+.took:empty { display: none; }
+.phone { margin: 0 0 10px; }
+.phone code { color: var(--accent); user-select: all; overflow-wrap: anywhere; }
 .hint { font-size: 20px; font-weight: 600; }
 .probs { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 3px; font-size: 13px; }
 .probs li {

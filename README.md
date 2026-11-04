@@ -9,107 +9,94 @@ Built for the Meta Global AI Developer Hackathon, on Meta models only, no traini
 | Role | Model | How it decides | Where it runs |
 |---|---|---|---|
 | **System 1** (default) | [MetaEncoder](https://huggingface.co/facebook/meta-encoder): Muse Glimmer 30B contrastively tuned into a bi-encoder ([paper](https://arxiv.org/abs/2610.11316)) | frame + goal and each option are embedded; cosine similarity -> softmax. One forward pass, no text generated, option embeddings cached | your Modal GPU (`deploy/`) |
+| **System 1**, second opinion | [JevAny-Muse-Glimmer-30B](https://huggingface.co/SimpleJev/JevAny-Muse-Glimmer-30B-LoRA): a LoRA + pointer head on Muse Glimmer 30B ([JevAny](https://github.com/SimpleJev/JevAny)) | frame + goal + labelled options in one prefill; a small trained head scores the options. Trained on text decisions only, so photos are the open question | your Modal GPU (`deploy/`) |
 | **System 2** (compare / fallback) | [Muse Glimmer 30B](https://huggingface.co/meta-models/Muse-Glimmer-30B) | reasons, then answers `ANSWER: <letter>` | OpenRouter |
 | Highlight | SAM 3.1 | text concept -> boxes | Meta Model API |
 
 ```
 camera frame ─┐                       ┌─► MetaEncoder: cos(task, option_i) ─► softmax ─► choice + p
-goal (text)  ─┼─► task / options ─────┤
+goal (text)  ─┼─► task / options ─────┼─► JevAny: one prefill ─► pointer head ─────────► choice + p
 options      ─┘   (closed set:        └─► Glimmer: reasoning ─► ANSWER: <letter>        (compare)
                   TAKE_<obj>|NONE|ASK_VIEW)
                                    chosen object ─► SAM 3.1 ─► box overlay
 ```
 
-## Quickstart (5 minutes, no accounts)
+## Run it
 
-Needs Python 3.11+ (tested on 3.13) and git.
-
-**Windows (PowerShell)**
-
-```powershell
-git clone https://github.com/aim-do/glimmer-decide
-cd glimmer-decide
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-python -m server --mock
-```
-
-**macOS / Linux**
-
-```bash
-git clone https://github.com/aim-do/glimmer-decide
-cd glimmer-decide
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python -m server --mock
-```
-
-Your browser opens http://localhost:8000. `--mock` answers with fake decisions, so you can
-try the whole interface — camera, photos, labeling — without keys or a GPU. The first run
-creates `.env` from `.env.example`; that is where keys go.
-
-## Turn on the real models
-
-Each key switches on one part; add any subset to `.env` and restart `python -m server`
-(without `--mock`). The terminal prints what is configured.
-
-| Part | What you need | `.env` |
-|---|---|---|
-| Glimmer (reasoning) | an [OpenRouter](https://openrouter.ai/keys) key with a few dollars of credit | `GLIMMER_API_KEY=` |
-| SAM 3.1 box highlight | a [Meta Model API](https://dev.meta.ai) key | `MODEL_API_KEY=` |
-| MetaEncoder (fast decider) | your own GPU on Modal, next section | `HF_TOKEN=` (+ filled in by setup) |
-
-Glimmer alone is enough for a working demo; MetaEncoder adds the fast one-pass decider.
-
-### MetaEncoder on your own GPU (Modal), one-time setup
-
-MetaEncoder has no hosted API, so it runs on a GPU in your [Modal](https://modal.com) account
-(80 GB card; Modal bills per second and the container sleeps when idle).
-
-1. **Hugging Face.** Open [facebook/meta-encoder](https://huggingface.co/facebook/meta-encoder),
-   click *Agree and access repository* (approved instantly). Create a token at
-   [settings/tokens](https://huggingface.co/settings/tokens): type *Read*, or a fine-grained
-   token with *Read access to contents of all public gated repos you can access*.
-   Put it in `.env` as `HF_TOKEN=...`.
-2. **Modal.** Create an account at [modal.com](https://modal.com) (hackathon credits apply).
-3. **Setup** — one command; it opens the browser for the Modal login if needed, stores the
-   HF token as a Modal secret, generates the service token, deploys, and writes
-   `ENCODER_URL` / `ENCODER_TOKEN` into `.env`:
+1. **Install** once (Python 3.11+ and git):
 
    ```bash
-   python deploy/setup_modal.py all
+   git clone https://github.com/aim-do/glimmer-decide
+   cd glimmer-decide
+   python -m venv .venv            # macOS / Linux: python3 -m venv .venv
+   .venv\Scripts\activate          # macOS / Linux: source .venv/bin/activate
+   pip install -r requirements.txt
    ```
 
-4. Run `python -m server`. The **MetaEncoder GPU** panel at the top of the page has
-   **Start** (deploy + warm the GPU) and **Stop** (shut the GPU down and undeploy).
+2. **Try it with no keys:** `python -m server --mock` opens http://localhost:8000 with fake
+   decisions, so the whole interface works. This first run also creates `.env`.
 
-The very first Start downloads the 62 GB of weights into a Modal Volume (~14 min); later
-starts take ~2 min. While the GPU runs it costs about $4/h on an H100 (`ENCODER_GPU=A100-80GB`
-in `.env` is ~$2.5/h); it falls asleep after 5 idle minutes, and **Stop** turns it off
-completely so nothing can wake it. From a terminal the same is:
+3. **Add your keys to `.env`.** Each one turns on one part; Glimmer alone is already a demo.
+
+   | Part | In `.env` | Where to get it |
+   |---|---|---|
+   | Glimmer (reasoning) | `GLIMMER_API_KEY=` | an [OpenRouter key](https://openrouter.ai/keys) with a few dollars of credit |
+   | SAM 3.1 box highlight | `MODEL_API_KEY=` | a [Meta Model API](https://dev.meta.ai) key |
+   | MetaEncoder (fast decider) | `HF_TOKEN=`, then run `python deploy/setup_modal.py all` once | accept the terms on [facebook/meta-encoder](https://huggingface.co/facebook/meta-encoder), then create a *Read* [token](https://huggingface.co/settings/tokens); a [Modal](https://modal.com) account for the GPU |
+   | JevAny (second fast decider) | nothing new: run `python deploy/setup_modal.py jevany` once | the same Modal account; the weights are open (it downloads ~60 GB once, on a cheap CPU container) |
+
+   MetaEncoder has no hosted API, so the repo deploys it to a GPU in your Modal account
+   (`deploy/modal_metaencoder.py`). `setup_modal.py all` signs you in to Modal in the
+   browser, stores the HF token there, deploys, and writes `ENCODER_URL` and `ENCODER_TOKEN`
+   into `.env` itself.
+
+4. **Start:** `python -m server --phone` (or just `python -m server` without a phone). It prints:
+
+   ```
+     This computer:       https://localhost:8000
+     Phone (same Wi-Fi):  https://192.168.1.23:8000
+   ```
+
+   Open the phone address on your phone; the page on the computer shows it too. The first
+   time, each browser warns about the self-signed certificate: *Advanced → Proceed*
+   (iPhone: *Show Details → visit this website*). Then the phone camera works.
+
+5. **GPUs:** press **Start** in the *MetaEncoder GPU* (or *JevAny GPU*) panel and wait ~2-3 min;
+   press **Stop** when you are done. Each GPU costs ~$4/h while on and sleeps after 5 idle minutes.
+
+### GPU deciders: details
+
+- MetaEncoder and JevAny each need their own 80 GB card (62 GB and 59 GB of weights): running
+  both costs ~$8/h. Modal bills per second; hackathon credits apply.
+- The HF token can also be fine-grained, with *Read access to contents of all public gated
+  repos you can access*. JevAny needs no Hugging Face access at all.
+- The very first MetaEncoder Start downloads its 62 GB of weights into a Modal Volume (~14 min);
+  JevAny's setup downloads its weights beforehand. Later starts take ~2-3 min. An H100 is
+  ~$4/h; `ENCODER_GPU` / `JEVANY_GPU=A100-80GB` in `.env` is ~$2.5/h.
+- **Stop** shuts a GPU down and undeploys it, so nothing can wake it. From a terminal:
 
 ```bash
-python deploy/setup_modal.py status   # deployed? GPU running?
-python deploy/setup_modal.py start    # deploy (a MetaEncoder request then wakes the GPU)
-python deploy/setup_modal.py stop     # GPU off, app undeployed
+python deploy/setup_modal.py status                 # deployed? GPU running? (both)
+python deploy/setup_modal.py start [encoder|jevany] # deploy; a request then wakes the GPU
+python deploy/setup_modal.py stop                   # both GPUs off, apps undeployed
 ```
 
 ## Ways to give it a picture
 
 | Where | How | Notes |
 |---|---|---|
-| Laptop / desktop | webcam on http://localhost:8000 | browsers allow the camera on localhost |
+| Laptop / desktop | webcam on the *This computer* address | browsers allow the camera on localhost |
 | Any computer | **Photo** button, **drag an image** onto the frame, or **paste** one (Ctrl+V) | no camera needed — screenshots and saved photos work |
-| Phone on the same Wi-Fi | `python -m server --https`, then open the `https://<computer-ip>:8000` address it prints | the certificate is self-signed, so the phone warns once: *Advanced → Proceed* (iPhone: *Show Details → visit this website*); after that the live camera works. Anyone on that Wi-Fi can open the page and spend your credits |
+| Phone on the same Wi-Fi | `python -m server --phone`, then open the *Phone* address it prints (the page on the computer shows it too) | the certificate is self-signed, so the phone warns once: *Advanced → Proceed* (iPhone: *Show Details → visit this website*); after that the live camera works. Anyone on that Wi-Fi can open the page and spend your credits |
 | Phone anywhere | `tailscale serve --bg 8000` on the computer, then `https://<computer>.<tailnet>.ts.net` on the phone | real certificate, no warning, only your own devices ([Tailscale](https://tailscale.com) on both) |
 
-Phones get the camera only over HTTPS. `--host 0.0.0.0` without `--https` also works, but then
+Phones get the camera only over HTTPS. `--host 0.0.0.0` without `--phone` also works, but then
 only **Photo** does (it still opens the phone's camera app).
 
 Then type the goal (or tap 🎤 where the browser supports speech), pick the decider —
-MetaEncoder, Glimmer, or **Both** to compare — and press **What should I use?**
+MetaEncoder, JevAny, Glimmer, or **Compare all** — and press **What should I use?** The button
+counts the seconds while the models think; each answer shows how long its model took (⏱)
+and the total time stays under the button.
 
 ## Labeling and evaluation
 
@@ -118,8 +105,9 @@ In the app, open *Save sample*, tick every correct action and save. Frames go to
 
 ```bash
 python -m eval.run_eval --decider encoder          # MetaEncoder, frame + goal
+python -m eval.run_eval --decider jevany           # JevAny decision head
 python -m eval.run_eval --decider glimmer          # Glimmer with reasoning
-python -m eval.run_eval --decider both             # one result file per decider
+python -m eval.run_eval --decider both             # every configured decider, one result file each
 python -m eval.run_eval --decider encoder --blind  # goal only: how much does the camera matter?
 ```
 
@@ -133,8 +121,9 @@ for calibrating a refusal threshold. Hold out whole scenes, not neighbouring fra
 |---|---|
 | Camera does not start | Use http://localhost (not the IP) on the computer, allow the permission, or use Photo / drag / paste. |
 | Phone: *This site can't be reached* | Phone and computer on the same Wi-Fi (not a guest or hotspot network, VPN off on the phone); type the exact address the terminal prints. Windows: when the firewall asks, allow Python (tick *Public* too if your Wi-Fi is marked Public). Android: turn mobile data off for the test (some phones route traffic over it when Wi-Fi looks weak) and allow Chrome *Nearby devices* (Settings → Apps → Chrome → Permissions). Chrome or another non-Safari browser on iPhone: Settings → that browser → *Local Network* on. Some routers isolate Wi-Fi devices from each other: then use Tailscale. |
-| Phone: *Your connection is not private* | Expected with `--https` (self-signed certificate): *Advanced → Proceed*. It comes back when the computer's address changes and a new certificate is made. |
-| Panel says *Not set up yet* | Run `python deploy/setup_modal.py all`; the page picks the result up without a restart. |
+| Phone: *Your connection is not private* | Expected with `--phone` (self-signed certificate): *Advanced → Proceed*. It comes back when the computer's address changes and a new certificate is made. |
+| Panel says *Not set up yet* | Run the command it names (`setup_modal.py all` for MetaEncoder, `setup_modal.py jevany` for JevAny); the page picks the result up without a restart. |
+| JevAny Start ends with HTTP 5xx | `modal app logs glimmer-decide-jevany`: usually out of GPU memory (use an 80 GB card) or the weights were never downloaded (rerun `setup_modal.py jevany`). |
 | `GatedRepoError` during setup | Accept the terms on the model page and give the HF token gated-repo read access (step 1). |
 | Start ends with HTTP 401 | `.env` and Modal disagree on `ENCODER_TOKEN`: rerun `python deploy/setup_modal.py all`. |
 | *Starting GPU…* runs much longer than 15 min | `modal app logs glimmer-decide-metaencoder`; press Stop to end the billing. |
@@ -192,9 +181,10 @@ image it still picked by the goal text. That is what the labeled eval set has to
 ## Layout
 
 ```
-server/   FastAPI app (python -m server); encoder.py (MetaEncoder decider), encoder_ctl.py (GPU Start/Stop),
-          certs.py (self-signed HTTPS for phones), decision.py (Glimmer), sam.py, tasks.py
-deploy/   Modal service for MetaEncoder + setup_modal.py (all / status / start / stop)
+server/   FastAPI app (python -m server); encoder.py (MetaEncoder decider), jevany.py (JevAny decider),
+          encoder_ctl.py (GPU Start/Stop), certs.py (self-signed HTTPS for phones), decision.py (Glimmer),
+          sam.py, tasks.py
+deploy/   Modal services for MetaEncoder and JevAny + setup_modal.py (all / jevany / status / start / stop)
 domains/  action sets (desk.json)
 web/      vanilla-JS camera client
 eval/     offline evaluation

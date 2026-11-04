@@ -4,7 +4,8 @@ const MAX_SIDE = 1024;
 const API_TIMEOUT_MS = 260_000;   // server deadline is 240 s; the client waits a little longer
 
 const state = { domains: [], frameUrl: null, lastDecision: null, stream: null,
-                decideSeq: 0, saving: false, elapsedTimer: null, gpuTimer: null };
+                decideSeq: 0, saving: false, gpuTimers: {} };
+const sec = (ms) => `${(ms / 1000).toFixed(1)} s`;
 
 // The server requires this header on POSTs that spend money (blocks localhost CSRF).
 const UI_HEADERS = { "X-Requested-With": "glimmer-decide" };
@@ -159,10 +160,13 @@ async function onDecide() {
   const seq = ++state.decideSeq;
   $("decide").disabled = true;
   const t0 = Date.now();
-  $("decide").textContent = "Thinking…";
-  state.elapsedTimer = setInterval(() => {
-    if (seq === state.decideSeq) $("decide").textContent = `Thinking… ${Math.round((Date.now() - t0) / 1000)}s`;
-  }, 1000);
+  const tick = () => {
+    if (seq === state.decideSeq) $("decide").textContent = `Thinking… ${sec(Date.now() - t0)}`;
+  };
+  tick();
+  const timer = setInterval(tick, 100);
+  $("took").textContent = "";
+  let answered = false;
   try {
     if (state.frameUrl) await redrawFrame();
     const r = await api("/api/decide", {
@@ -173,19 +177,23 @@ async function onDecide() {
     state.lastDecision = r.decisions.find((d) => d.action) || r.decisions[0];
     renderDecisions(r.decisions, r.highlight, r.highlight_decider);
     if (r.highlight?.boxes?.length) drawBoxes(r.highlight.boxes);
+    answered = true;
   } catch (e) {
     if (seq !== state.decideSeq) return;
     renderDecisions([{ decider: "error", hint: "Request failed", error: String(e.message || e), raw: "", latency_ms: 0 }]);
   } finally {
+    clearInterval(timer);
     if (seq === state.decideSeq) {
-      clearInterval(state.elapsedTimer);
+      // The total stays on screen until the next question (the button resets).
+      $("took").textContent = `${answered ? "Answered" : "Failed"} in ${sec(Date.now() - t0)}`;
       $("decide").disabled = false;
       $("decide").textContent = "What should I use?";
     }
   }
 }
 
-const DECIDER_NAMES = { encoder: "MetaEncoder · System 1", glimmer: "Glimmer · reasoning", error: "error" };
+const DECIDER_NAMES = { encoder: "MetaEncoder · System 1", jevany: "JevAny · System 1",
+                        glimmer: "Glimmer · reasoning", error: "error" };
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -198,13 +206,16 @@ function renderDecisions(decisions, highlight, highlightDecider) {
   const names = Object.fromEntries(state.domains.flatMap((d) => d.actions).map((a) => [a.id, a.name]));
   $("results").replaceChildren(...decisions.map((d) => {
     const card = el("div", "result");
-    card.append(el("div", "who", DECIDER_NAMES[d.decider] || d.decider));
+    const who = el("div", "who");
+    who.append(el("span", "", DECIDER_NAMES[d.decider] || d.decider));
+    if (d.latency_ms) who.append(el("span", "time", `⏱ ${sec(d.latency_ms)}`));   // this model's own time
+    card.append(who);
     const refusal = !d.action || d.action === "NONE" || d.action === "ASK_VIEW";
     card.append(el("div", "hint" + (refusal ? " none" : ""), d.hint));
-    const parts = [d.action ? `${d.action}` : "no decision", `${d.latency_ms} ms`];
+    const parts = [d.action ? `${d.action}` : "no decision"];
     if (d.blind) parts.push("blind");
     if (highlight && d.decider === highlightDecider) {
-      parts.push(highlight.error ? "SAM highlight unavailable" : `SAM ${highlight.boxes.length} box(es), ${highlight.latency_ms} ms`);
+      parts.push(highlight.error ? "SAM highlight unavailable" : `SAM ${highlight.boxes.length} box(es), ${sec(highlight.latency_ms)}`);
     }
     if (d.error) parts.push(d.error);
     card.append(el("div", "meta", parts.join(" · ")));
@@ -273,51 +284,57 @@ function setupMic() {
   });
 }
 
-// ---- MetaEncoder GPU on Modal (Start / Stop) ---------------------------------
+// ---- GPU services on Modal: MetaEncoder, JevAny (Start / Stop) ---------------
 
 const GPU_POLL_BUSY_MS = 3000;
 const GPU_POLL_IDLE_MS = 30000;
+const GPUS = { encoder: { name: "MetaEncoder", cold: "~2 min" }, jevany: { name: "JevAny", cold: "~3 min" } };
 
-function gpuView(s) {
+function gpuView(key, s) {
+  const { name, cold } = GPUS[key];
   if (!s.available) return { text: s.reason, cls: "off", start: false, stop: false };
   if (s.op === "starting") return { text: "Deploying…", cls: "busy", start: false, stop: false };
   if (s.op === "warming") {
-    return { text: `Starting GPU… ${s.elapsed_s}s (cold start ~2 min)`, cls: "busy", start: false, stop: true };
+    return { text: `Starting GPU… ${s.elapsed_s}s (cold start ${cold})`, cls: "busy", start: false, stop: true };
   }
   if (s.op === "stopping") return { text: "Stopping…", cls: "busy", start: false, stop: false };
   const err = s.error ? ` — ${s.error}` : "";
   if (s.deployed === null) return { text: `Status unknown (Modal did not answer)${err}`, cls: "off", start: true, stop: true };
   if (s.containers > 0) return { text: `Running · GPU on, ~$4/h until Stop or 5 idle min${err}`, cls: "on", start: false, stop: true };
-  if (s.deployed) return { text: `Asleep · the next MetaEncoder request wakes it (~2 min)${err}`, cls: "idle", start: true, stop: true };
+  if (s.deployed) return { text: `Asleep · the next ${name} request wakes it (${cold})${err}`, cls: "idle", start: true, stop: true };
   return { text: `Stopped · no GPU cost${err}`, cls: "off", start: true, stop: false };
 }
 
-async function refreshGpu() {
-  clearTimeout(state.gpuTimer);
+const gpuPart = (key, cls) => document.querySelector(`[data-gpu="${key}"] .${cls}`);
+
+async function refreshGpu(key) {
+  clearTimeout(state.gpuTimers[key]);
   let s;
-  try { s = await api("/api/encoder"); } catch (e) { s = { available: false, reason: "GPU status unavailable." }; }
-  const v = gpuView(s);
-  $("gpu").hidden = false;
-  $("gpu-state").textContent = v.text;
-  $("gpu-state").className = "gpu-state " + v.cls;
-  $("gpu-start").disabled = !v.start;
-  $("gpu-stop").disabled = !v.stop;
+  try { s = await api(`/api/gpu/${key}`); } catch (e) { s = { available: false, reason: "GPU status unavailable." }; }
+  const v = gpuView(key, s);
+  document.querySelector(`[data-gpu="${key}"]`).hidden = false;
+  gpuPart(key, "gpu-state").textContent = v.text;
+  gpuPart(key, "gpu-state").className = "gpu-state " + v.cls;
+  gpuPart(key, "gpu-start").disabled = !v.start;
+  gpuPart(key, "gpu-stop").disabled = !v.stop;
   const busy = s.available && s.op && s.op !== "idle";
-  if (!document.hidden) state.gpuTimer = setTimeout(refreshGpu, busy ? GPU_POLL_BUSY_MS : GPU_POLL_IDLE_MS);
+  if (!document.hidden) {
+    state.gpuTimers[key] = setTimeout(() => refreshGpu(key), busy ? GPU_POLL_BUSY_MS : GPU_POLL_IDLE_MS);
+  }
 }
 
-async function gpuAction(path) {
-  $("gpu-start").disabled = true;
-  $("gpu-stop").disabled = true;
+async function gpuAction(key, op) {
+  gpuPart(key, "gpu-start").disabled = true;
+  gpuPart(key, "gpu-stop").disabled = true;
   try {
-    await api(path, {});
+    await api(`/api/gpu/${key}/${op}`, {});
   } catch (e) {
-    $("gpu-state").textContent = e.message || String(e);
-    clearTimeout(state.gpuTimer);
-    state.gpuTimer = setTimeout(refreshGpu, 5000);   // re-enable the buttons from real state
+    gpuPart(key, "gpu-state").textContent = e.message || String(e);
+    clearTimeout(state.gpuTimers[key]);
+    state.gpuTimers[key] = setTimeout(() => refreshGpu(key), 5000);   // re-enable the buttons from real state
     return;
   }
-  refreshGpu();
+  refreshGpu(key);
 }
 
 // ---- init -------------------------------------------------------------------
@@ -342,22 +359,39 @@ function renderDomain() {
   }));
 }
 
+// On the computer, tell the user which address to open on the phone (hidden on the phone itself).
+function showPhoneAddress(phoneUrl) {
+  if (!["localhost", "127.0.0.1", "[::1]"].includes(location.hostname)) return;
+  const p = $("phone");
+  p.replaceChildren(...(phoneUrl
+    ? ["📱 On your phone (same Wi-Fi) open ", el("code", "", phoneUrl)]
+    : ["📱 For a phone: restart the server with ", el("code", "", "python -m server --phone"),
+       " and open the address it shows here."]));
+  p.hidden = false;
+}
+
 async function init() {
   const [status, domains] = await Promise.all([api("/api/status"), api("/api/domains")]);
   const pill = $("status");
-  const live = [status.encoder && "MetaEncoder", status.glimmer && "Glimmer", status.sam && "SAM"].filter(Boolean);
+  const live = [status.encoder && "MetaEncoder", status.jevany && "JevAny", status.glimmer && "Glimmer",
+                status.sam && "SAM"].filter(Boolean);
   pill.textContent = status.mock ? "mock mode" : live.join(" + ") || "nothing configured";
   pill.className = "pill " + (status.mock ? "mock" : "live");
+  showPhoneAddress(status.phone_url);
   $("decider").value = status.default_decider;
+  const configured = ["encoder", "jevany", "glimmer"].filter((k) => status[k]);
   for (const o of $("decider").options) {
-    o.disabled = (o.value === "encoder" && !status.encoder) || (o.value === "glimmer" && !status.glimmer)
-      || (o.value === "both" && !(status.encoder && status.glimmer));
+    o.disabled = o.value === "both" ? configured.length < 2 : !status[o.value];
   }
-  // No automatic GPU warm-up on page load: the GPU runs only after Start in the panel.
-  $("gpu-start").addEventListener("click", () => gpuAction("/api/encoder/start"));
-  $("gpu-stop").addEventListener("click", () => gpuAction("/api/encoder/stop"));
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshGpu(); });
-  refreshGpu();
+  // No automatic GPU warm-up on page load: a GPU runs only after Start in its panel.
+  for (const key of Object.keys(GPUS)) {
+    gpuPart(key, "gpu-start").addEventListener("click", () => gpuAction(key, "start"));
+    gpuPart(key, "gpu-stop").addEventListener("click", () => gpuAction(key, "stop"));
+    refreshGpu(key);
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) Object.keys(GPUS).forEach(refreshGpu);
+  });
   state.domains = domains;
   $("domain").replaceChildren(...domains.map((d) => new Option(d.title, d.id)));
   $("domain").addEventListener("change", renderDomain);

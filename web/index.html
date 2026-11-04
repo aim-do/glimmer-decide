@@ -13,14 +13,23 @@
   </header>
 
   <main>
-    <section id="gpu" class="gpu" aria-label="MetaEncoder GPU" hidden>
+    <section class="gpu" data-gpu="encoder" aria-label="MetaEncoder GPU" hidden>
       <span class="gpu-title">MetaEncoder GPU</span>
-      <span id="gpu-state" class="gpu-state" role="status">…</span>
+      <span class="gpu-state" role="status">…</span>
       <span class="gpu-buttons">
-        <button id="gpu-start" class="btn ghost" disabled>Start</button>
-        <button id="gpu-stop" class="btn ghost" disabled>Stop</button>
+        <button class="btn ghost gpu-start" disabled>Start</button>
+        <button class="btn ghost gpu-stop" disabled>Stop</button>
       </span>
     </section>
+    <section class="gpu" data-gpu="jevany" aria-label="JevAny GPU" hidden>
+      <span class="gpu-title">JevAny GPU</span>
+      <span class="gpu-state" role="status">…</span>
+      <span class="gpu-buttons">
+        <button class="btn ghost gpu-start" disabled>Start</button>
+        <button class="btn ghost gpu-stop" disabled>Stop</button>
+      </span>
+    </section>
+    <p id="phone" class="phone meta" hidden></p>
 
     <p class="meta">Point the camera at your desk — or use Photo, drop an image onto the frame, or paste one (Ctrl+V). Then say or type what you want to do and ask what to use. Try an example goal below if you are unsure how to phrase it.</p>
     <section class="stage">
@@ -50,13 +59,15 @@
         <label class="visually-hidden" for="decider">Which model decides</label>
         <select id="decider" title="Which model decides">
           <option value="encoder">MetaEncoder — one pass, cosine</option>
+          <option value="jevany">JevAny — Glimmer + decision head</option>
           <option value="glimmer">Glimmer — reasoning</option>
-          <option value="both">Both — compare</option>
+          <option value="both">Compare all</option>
         </select>
         <label class="check"><input id="blind" type="checkbox"> blind (no image)</label>
       </div>
       <button id="decide" class="btn primary">What should I use?</button>
-      <p class="meta">Frames are sent to the configured model services to decide. The MetaEncoder GPU runs only after Start (or when a MetaEncoder request wakes a sleeping one); Stop shuts it down.</p>
+      <p id="took" class="took" role="status"></p>
+      <p class="meta">Frames are sent to the configured model services to decide. The GPUs (MetaEncoder, JevAny) run only after Start (or when a request wakes a sleeping one); Stop shuts them down.</p>
 
       <div id="results" class="results" aria-live="polite"></div>
 
