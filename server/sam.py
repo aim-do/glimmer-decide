@@ -12,6 +12,7 @@ import time
 import httpx
 
 from .config import Settings
+from .types import public_error
 
 BOX_RE = re.compile(r"(\d+)<\|box;([^|]*)\|>")
 
@@ -22,25 +23,32 @@ def parse_boxes(line: str) -> list[dict]:
         kv = dict(f.split("=", 1) for f in fields.split(";") if "=" in f)
         try:
             box = {"id": int(obj_id),
-                   "x1": int(kv["x1"]), "y1": int(kv["y1"]),
-                   "x2": int(kv["x2"]), "y2": int(kv["y2"]),
-                   "w": int(kv["w"]), "h": int(kv["h"])}
+                   "x1": int(float(kv["x1"])), "y1": int(float(kv["y1"])),
+                   "x2": int(float(kv["x2"])), "y2": int(float(kv["y2"])),
+                   "w": int(float(kv["w"])), "h": int(float(kv["h"]))}
+            if "c" in kv:
+                try:
+                    box["c"] = float(kv["c"])
+                except ValueError:
+                    pass   # one bad confidence must not nuke the other boxes
         except (KeyError, ValueError):
             continue
-        if "c" in kv:
-            box["c"] = float(kv["c"])
         boxes.append(box)
     return boxes
 
 
-def _output_text(resp: dict) -> str:
+def _output_text(resp: object) -> str:
+    if not isinstance(resp, dict):
+        raise ValueError("SAM response is not an object")
     if resp.get("output_text"):
-        return resp["output_text"]
+        return str(resp["output_text"])
     parts = []
-    for item in resp.get("output", []):
+    for item in resp.get("output", []) or []:
+        if not isinstance(item, dict):
+            continue
         for c in item.get("content", []) or []:
-            if c.get("type") in ("output_text", "text"):
-                parts.append(c.get("text", ""))
+            if isinstance(c, dict) and c.get("type") in ("output_text", "text"):
+                parts.append(str(c.get("text", "")))
     return "".join(parts)
 
 
@@ -62,9 +70,8 @@ def segment(settings: Settings, concept: str, image_data_url: str,
         r = client.post(f"{settings.meta_base_url}/responses", json=body, headers=headers)
         r.raise_for_status()
         boxes, error = parse_boxes(_output_text(r.json())), None
-    except (httpx.HTTPError, ValueError) as e:
-        detail = getattr(getattr(e, "response", None), "text", "")
-        boxes, error = [], f"{type(e).__name__}: {e} {detail[:300]}".strip()
+    except (httpx.HTTPError, ValueError, TypeError, AttributeError, KeyError) as e:
+        boxes, error = [], public_error(e)
     finally:
         if own:
             client.close()

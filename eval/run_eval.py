@@ -3,6 +3,7 @@
 Usage:
   python -m eval.run_eval --decider encoder   # MetaEncoder, frame + goal
   python -m eval.run_eval --decider glimmer   # generative Glimmer with reasoning
+  python -m eval.run_eval --decider both      # both deciders, one output file each
   python -m eval.run_eval --decider encoder --blind   # goal only (camera ablation)
   python -m eval.run_eval --data data/my.jsonl --repeats 3
 
@@ -15,6 +16,7 @@ import base64
 import json
 import mimetypes
 import time
+import uuid
 from collections import Counter
 from pathlib import Path
 
@@ -36,7 +38,26 @@ def data_url(path: Path) -> str:
     return f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode()}"
 
 
+def load_records(data_path: Path) -> tuple[list[dict], int]:
+    """Parse captures.jsonl, skipping (and counting) malformed lines."""
+    records, skipped = [], 0
+    for line in data_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            skipped += 1
+            continue
+        if not isinstance(rec, dict) or not rec.get("gold"):
+            skipped += 1
+            continue
+        records.append(rec)
+    return records, skipped
+
+
 def summarize(rows: list[dict]) -> dict:
+    rows = [r for r in rows if not r.get("skipped")]   # data problems are not model errors
     n = len(rows)
     absent = [r for r in rows if r["gold"] == [NONE]]
     present = [r for r in rows if NONE not in r["gold"] and ASK_VIEW not in r["gold"]]
@@ -54,10 +75,51 @@ def summarize(rows: list[dict]) -> dict:
     }
 
 
+def run_one(settings, decider: str, records: list[dict], data_path: Path,
+            blind: bool, repeats: int) -> Path:
+    decide_fn = DECIDERS[decider]
+    domains: dict[str, object] = {}
+    rows = []
+    for i, rec in enumerate(records):
+        img_path = data_path.parent / rec["image"]
+        if not blind and not img_path.exists():
+            print(f"[skip] missing image {img_path}")
+            rows.append({"i": i, "image": rec["image"], "goal": rec["goal"], "gold": rec["gold"],
+                         "pred": None, "correct": False, "latency_ms": 0,
+                         "error": "missing image file", "probs": None, "skipped": True})
+            continue
+        if rec["domain"] not in domains:
+            domains[rec["domain"]] = load_domain(rec["domain"])
+        domain = domains[rec["domain"]]
+        image = None if blind else data_url(img_path)
+        for _ in range(repeats):
+            d = decide_fn(settings, domain, rec["goal"], image)
+            row = {"i": i, "image": rec["image"], "goal": rec["goal"], "gold": rec["gold"],
+                   "pred": d.action, "correct": d.action in rec["gold"],
+                   "latency_ms": d.latency_ms, "error": d.error, "probs": d.probs}
+            rows.append(row)
+            mark = "ok " if row["correct"] else "ERR"
+            print(f"[{mark}] {rec['goal'][:50]:50s} gold={rec['gold']} pred={d.action}")
+
+    summary = summarize(rows)
+    summary.update(decider=decider, blind=blind, mock=settings.mock, data=str(data_path),
+                   model=("facebook/meta-encoder" if decider == "encoder" else settings.glimmer_model),
+                   reasoning=(None if decider == "encoder" else settings.glimmer_reasoning),
+                   encoder_style=(settings.encoder_style if decider == "encoder" else None))
+    out_dir = ROOT / "eval" / "results"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime('%Y%m%d-%H%M%S') + "-" + uuid.uuid4().hex[:6]
+    out = out_dir / f"{stamp}-{decider}{'-blind' if blind else ''}.json"
+    out.write_text(json.dumps({"summary": summary, "rows": rows}, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(json.dumps(summary, indent=2))
+    print(f"-> {out}")
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default=str(ROOT / "data" / "captures.jsonl"))
-    ap.add_argument("--decider", choices=sorted(DECIDERS), default=None)
+    ap.add_argument("--decider", choices=sorted(DECIDERS) + ["both"], default=None)
     ap.add_argument("--blind", action="store_true")
     ap.add_argument("--repeats", type=int, default=1)
     ap.add_argument("--limit", type=int, default=0)
@@ -68,39 +130,17 @@ def main() -> None:
     if settings.mock and not args.allow_mock:
         raise SystemExit("MOCK=1: results would be fake. Unset MOCK or pass --allow-mock.")
     decider = args.decider or settings.decider
-    decide_fn = DECIDERS[decider]
     data_path = Path(args.data)
-    records = [json.loads(line) for line in data_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    records = [r for r in records if r.get("gold")]
+    records, skipped = load_records(data_path)
+    if skipped:
+        print(f"skipped {skipped} malformed/unlabeled record(s) in {data_path}")
     if args.limit:
         records = records[: args.limit]
     if not records:
         raise SystemExit(f"no labeled records in {data_path}")
 
-    rows = []
-    for i, rec in enumerate(records):
-        domain = load_domain(rec["domain"])
-        image = None if args.blind else data_url(data_path.parent / rec["image"])
-        for _ in range(args.repeats):
-            d = decide_fn(settings, domain, rec["goal"], image)
-            row = {"i": i, "image": rec["image"], "goal": rec["goal"], "gold": rec["gold"],
-                   "pred": d.action, "correct": d.action in rec["gold"],
-                   "latency_ms": d.latency_ms, "error": d.error, "probs": d.probs}
-            rows.append(row)
-            mark = "ok " if row["correct"] else "ERR"
-            print(f"[{mark}] {rec['goal'][:50]:50s} gold={rec['gold']} pred={d.action}")
-
-    summary = summarize(rows)
-    summary.update(decider=decider, blind=args.blind, mock=settings.mock, data=str(data_path),
-                   model=("facebook/meta-encoder" if decider == "encoder" else settings.glimmer_model),
-                   reasoning=(None if decider == "encoder" else settings.glimmer_reasoning),
-                   encoder_style=(settings.encoder_style if decider == "encoder" else None))
-    out_dir = ROOT / "eval" / "results"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out = out_dir / f"{time.strftime('%Y%m%d-%H%M%S')}-{decider}{'-blind' if args.blind else ''}.json"
-    out.write_text(json.dumps({"summary": summary, "rows": rows}, indent=2, ensure_ascii=False), encoding="utf-8")
-    print(json.dumps(summary, indent=2))
-    print(f"-> {out}")
+    for name in (["encoder", "glimmer"] if decider == "both" else [decider]):
+        run_one(settings, name, records, data_path, args.blind, args.repeats)
 
 
 if __name__ == "__main__":

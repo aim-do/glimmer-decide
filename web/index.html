@@ -9,32 +9,45 @@
 <body>
   <header>
     <h1>Glimmer Decide</h1>
-    <span id="status" class="pill">…</span>
+    <span id="status" class="pill" role="status">…</span>
   </header>
 
   <main>
+    <section id="gpu" class="gpu" aria-label="MetaEncoder GPU" hidden>
+      <span class="gpu-title">MetaEncoder GPU</span>
+      <span id="gpu-state" class="gpu-state" role="status">…</span>
+      <span class="gpu-buttons">
+        <button id="gpu-start" class="btn ghost" disabled>Start</button>
+        <button id="gpu-stop" class="btn ghost" disabled>Stop</button>
+      </span>
+    </section>
+
+    <p class="meta">Point the camera at your desk — or use Photo, drop an image onto the frame, or paste one (Ctrl+V). Then say or type what you want to do and ask what to use. Try an example goal below if you are unsure how to phrase it.</p>
     <section class="stage">
       <video id="video" autoplay playsinline muted></video>
       <canvas id="frame" hidden></canvas>
       <div id="nocam" class="nocam" hidden>
-        Camera unavailable here. Upload a photo instead.
+        Camera unavailable here (it needs HTTPS or localhost, and permission). Use Photo, drop an image here, or paste one with Ctrl+V.
       </div>
     </section>
 
     <section class="controls">
       <div class="row">
+        <label class="visually-hidden" for="domain">Domain</label>
         <select id="domain"></select>
         <label class="btn ghost">Photo<input id="file" type="file" accept="image/*" capture="environment" hidden></label>
         <button id="live" class="btn ghost" hidden>Live</button>
       </div>
 
       <div class="row">
+        <label class="visually-hidden" for="goal">Goal</label>
         <input id="goal" type="text" placeholder="What do you want to do?" autocomplete="off">
-        <button id="mic" class="btn ghost" title="Speak the goal" hidden>🎤</button>
+        <button id="mic" class="btn ghost" title="Speak the goal" aria-label="Speak the goal" hidden>🎤</button>
       </div>
       <div id="examples" class="chips"></div>
 
       <div class="row">
+        <label class="visually-hidden" for="decider">Which model decides</label>
         <select id="decider" title="Which model decides">
           <option value="encoder">MetaEncoder — one pass, cosine</option>
           <option value="glimmer">Glimmer — reasoning</option>
@@ -43,15 +56,17 @@
         <label class="check"><input id="blind" type="checkbox"> blind (no image)</label>
       </div>
       <button id="decide" class="btn primary">What should I use?</button>
+      <p class="meta">Frames are sent to the configured model services to decide. The MetaEncoder GPU runs only after Start (or when a MetaEncoder request wakes a sleeping one); Stop shuts it down.</p>
 
-      <div id="results" class="results"></div>
+      <div id="results" class="results" aria-live="polite"></div>
 
       <details class="label-box">
         <summary>Save sample for the eval set</summary>
-        <p class="meta">Tick every action that is correct for this frame and goal.</p>
+        <p class="meta">Tick every action that is correct for this frame and goal. Label independently of the model.</p>
+        <p id="predicted" class="meta"></p>
         <div id="gold" class="gold"></div>
         <button id="save" class="btn ghost">Save frame + goal + label</button>
-        <span id="saved" class="meta"></span>
+        <span id="saved" class="meta" role="status"></span>
       </details>
     </section>
   </main>

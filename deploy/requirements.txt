@@ -1,2 +1,2 @@
-modal>=1.6
-huggingface_hub>=1.0
+# Everything is in the main requirements file now.
+-r ../requirements.txt

@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 MODEL_REPO = "facebook/meta-encoder"
 WEIGHTS_DIR = "/cache/meta-encoder"
-GPU = os.environ.get("ENCODER_GPU", "H100")   # any 80 GB card: H100, A100-80GB
+GPU = os.environ.get("ENCODER_GPU") or "H100"   # any 80 GB card: H100, A100-80GB
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -93,6 +93,8 @@ class MetaEncoderService:
             if it.text:
                 d["text"] = it.text
             if it.image:
+                if "," not in it.image:
+                    raise ValueError("image data URL is missing its comma separator")
                 raw = base64.b64decode(it.image.split(",", 1)[1])
                 d["image"] = Image.open(io.BytesIO(raw)).convert("RGB")
             prepared.append(d)

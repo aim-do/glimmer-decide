@@ -7,10 +7,12 @@ instead of guessing.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 DOMAINS_DIR = Path(__file__).resolve().parent.parent / "domains"
+_SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 NONE = "NONE"
 ASK_VIEW = "ASK_VIEW"
@@ -54,6 +56,8 @@ def _special_actions() -> list[Action]:
 
 
 def load_domain(domain_id: str) -> Domain:
+    if not _SAFE_ID.match(domain_id or ""):
+        raise FileNotFoundError(f"unknown domain {domain_id!r}")
     path = DOMAINS_DIR / f"{domain_id}.json"
     raw = json.loads(path.read_text(encoding="utf-8"))
     actions = [
@@ -75,7 +79,10 @@ def load_domain(domain_id: str) -> Domain:
 def list_domains() -> list[dict]:
     out = []
     for p in sorted(DOMAINS_DIR.glob("*.json")):
-        raw = json.loads(p.read_text(encoding="utf-8"))
-        out.append({"id": raw["id"], "title": raw["title"],
-                    "examples": raw.get("example_goals", [])})
+        try:
+            raw = json.loads(p.read_text(encoding="utf-8"))
+            out.append({"id": raw["id"], "title": raw["title"],
+                        "examples": raw.get("example_goals", [])})
+        except (ValueError, KeyError, OSError):
+            continue   # one bad domain file must not kill the whole list
     return out

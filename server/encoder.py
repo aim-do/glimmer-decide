@@ -22,8 +22,8 @@ import httpx
 import numpy as np
 
 from .config import Settings
-from .decision import Decision, _mock_letter, finish
-from .tasks import Domain
+from .tasks import ASK_VIEW, NONE, Domain
+from .types import Decision, finish, mock_letter, public_error
 
 # Closed-set prompt format recommended on the MetaEncoder model card:
 # "{state}\n\nTask: {instruction}\nCriteria:\n- {label}: {what the label means}".
@@ -35,6 +35,8 @@ EmbedFn = Callable[[list[dict]], np.ndarray]
 
 _cache: dict[str, np.ndarray] = {}
 _cache_lock = threading.Lock()
+_cache_max = 512
+_embed_refs: dict[str, EmbedFn] = {}   # keep custom embedders alive so id() is never reused
 
 
 def task_text(domain: Domain, goal: str) -> str:
@@ -70,7 +72,7 @@ def _hash_vec(text: str, dim: int = 64) -> np.ndarray:
 def mock_embed_factory(domain: Domain, goal: str, has_image: bool, style: str) -> EmbedFn:
     """Offline stand-in: candidates get hash vectors, the task points at the keyword-stub
     choice. Exercises the real cosine/softmax/caching path without a GPU."""
-    target = dict(domain.letters())[_mock_letter(domain, goal, has_image)]
+    target = dict(domain.letters())[mock_letter(domain, goal, has_image)]
     target_text = candidate_texts(domain, style)[domain.actions.index(target)]
 
     def embed(items: list[dict]) -> np.ndarray:
@@ -93,12 +95,16 @@ def _candidate_matrix(embed: EmbedFn, texts: list[str], namespace: str) -> np.nd
         vecs = embed([{"text": t} for t in missing])
         with _cache_lock:
             for t, v in zip(missing, vecs):
+                if len(_cache) >= _cache_max:
+                    _cache.clear()
                 _cache[f"{namespace}|{t}"] = v
     with _cache_lock:
         return np.stack([_cache[k] for k in keys])
 
 
 def softmax(x: np.ndarray, tau: float) -> np.ndarray:
+    if tau <= 0:
+        raise ValueError(f"tau must be > 0, got {tau}")
     z = (x - x.max()) / tau
     e = np.exp(z)
     return e / e.sum()
@@ -109,12 +115,14 @@ def decide_encoder(settings: Settings, domain: Domain, goal: str, image_data_url
     blind = image_data_url is None
     if embed is not None:
         namespace = f"custom:{id(embed)}"   # never mix vectors from different embedders
+        _embed_refs[namespace] = embed
     elif not settings.encoder_enabled:
         return finish(domain, None, "", 0, blind, "MetaEncoder is not configured (ENCODER_URL)", "encoder")
     elif settings.mock:
         embed, namespace = mock_embed_factory(domain, goal, not blind, settings.encoder_style), "mock"
     else:
         embed, namespace = (lambda items: remote_embed(settings, items)), settings.encoder_url
+    namespace = f"{namespace}|{domain.id}|{settings.encoder_style}"
 
     t0 = time.perf_counter()
     try:
@@ -126,16 +134,25 @@ def decide_encoder(settings: Settings, domain: Domain, goal: str, image_data_url
             # Blind ablation: tell the encoder the frame is missing, as the Glimmer prompt does.
             task["text"] = task["text"].replace("\n\nTask:", "\n(No camera frame is available.)\n\nTask:", 1)
         q = embed([task])[0]
-    except (httpx.HTTPError, KeyError, ValueError) as e:
-        detail = getattr(getattr(e, "response", None), "text", "")
+        if cands.shape[1] != q.shape[0]:
+            raise ValueError(f"embedding dim mismatch: candidates {cands.shape[1]} vs task {q.shape[0]}")
+        scores = cands @ q
+        probs = softmax(scores, settings.encoder_tau)
+    except (httpx.HTTPError, KeyError, ValueError, TypeError, IndexError) as e:
         return finish(domain, None, "", int((time.perf_counter() - t0) * 1000), blind,
-                      f"{type(e).__name__}: {e} {detail[:300]}".strip(), "encoder")
+                      public_error(e), "encoder")
     latency_ms = int((time.perf_counter() - t0) * 1000)
 
-    scores = cands @ q
-    probs = softmax(scores, settings.encoder_tau)
     order = np.argsort(-scores)
     raw = "\n".join(f"{domain.actions[i].name:14s} cos={scores[i]:+.4f} p={probs[i]:.3f}" for i in order)
     best = domain.actions[int(order[0])]
-    return finish(domain, best.id, raw, latency_ms, blind, None, "encoder",
+    chosen = best.id
+    # Blind mode stays an honest measurement of the model: no hard override.
+    # Only the margin gate may refuse, and ambiguity asks for another view
+    # rather than claiming nothing fits.
+    if chosen not in (NONE, ASK_VIEW) and len(scores) > 1:
+        margin = float(scores[order[0]] - scores[order[1]])
+        if margin < settings.encoder_min_margin:
+            chosen = ASK_VIEW
+    return finish(domain, chosen, raw, latency_ms, blind, None, "encoder",
                   {a.id: round(float(p), 4) for a, p in zip(domain.actions, probs)})

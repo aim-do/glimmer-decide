@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import re
 import time
-from dataclasses import asdict, dataclass
 
 import httpx
 
 from .config import Settings
-from .tasks import ASK_VIEW, NONE, Domain
+from .tasks import Domain
+from .types import Decision, finish, mock_letter as _mock_letter, public_error
+
+__all__ = ["Decision", "finish", "build_messages", "parse_letter", "decide"]
 
 SYSTEM_TEMPLATE = """Reasoning strength: {reasoning}
 You are the decision module of a camera assistant for a desk workspace.
@@ -31,34 +33,6 @@ ANSWER: <letter>
 and nothing else."""
 
 ANSWER_RE = re.compile(r"ANSWER\s*[:=]\s*\(?([A-Z])\)?", re.IGNORECASE)
-
-
-@dataclass
-class Decision:
-    action: str | None       # action id, None on failure
-    letter: str | None
-    hint: str
-    concept: str | None      # what SAM should highlight, if anything
-    raw: str
-    latency_ms: int
-    blind: bool = False
-    error: str | None = None
-    decider: str = "glimmer"
-    probs: dict[str, float] | None = None   # per-action probability (encoder only)
-
-    def to_dict(self) -> dict:
-        return asdict(self)
-
-
-def finish(domain: Domain, action_id: str | None, raw: str, latency_ms: int, blind: bool,
-           error: str | None, decider: str, probs: dict[str, float] | None = None) -> Decision:
-    if action_id is None:
-        return Decision(None, None, "Could not get a decision - try again.", None,
-                        raw, latency_ms, blind, error, decider, probs)
-    letter = next(l for l, a in domain.letters() if a.id == action_id)
-    action = domain.by_id(action_id)
-    concept = action.concept if action.id not in (NONE, ASK_VIEW) else None
-    return Decision(action.id, letter, action.hint, concept, raw, latency_ms, blind, error, decider, probs)
 
 
 def build_messages(domain: Domain, goal: str, image_data_url: str | None,
@@ -86,23 +60,6 @@ def parse_letter(text: str, n_options: int) -> str | None:
         return None
     letter = matches[-1].upper()
     return letter if ord(letter) - ord("A") < n_options else None
-
-
-def _mock_letter(domain: Domain, goal: str, has_image: bool) -> str:
-    """Deterministic keyword stub so the UI and tests run without an API key."""
-    g = goal.lower()
-    table = [("label", "TAKE_MARKER"), ("write", "TAKE_MARKER"), ("cut", "TAKE_SCISSORS"),
-             ("seal", "TAKE_TAPE"), ("without punching", "TAKE_BINDER_CLIP"),
-             ("staple", "TAKE_STAPLER"), ("mail", "TAKE_ENVELOPE"), ("glue", "TAKE_GLUE")]
-    target = ASK_VIEW if not has_image else NONE
-    for kw, aid in table:
-        if kw in g:
-            target = aid
-            break
-    for letter, a in domain.letters():
-        if a.id == target:
-            return letter
-    return domain.letters()[-1][0]
 
 
 def decide(settings: Settings, domain: Domain, goal: str,
@@ -141,9 +98,8 @@ def decide(settings: Settings, domain: Domain, goal: str,
                 reasoning = msg.get("reasoning") or msg.get("reasoning_content") or ""
                 raw = (raw + "\n" + reasoning).strip()
             error = None
-        except (httpx.HTTPError, KeyError, ValueError) as e:
-            detail = getattr(getattr(e, "response", None), "text", "")
-            raw, error = "", f"{type(e).__name__}: {e} {detail[:500]}".strip()
+        except (httpx.HTTPError, KeyError, ValueError, IndexError, TypeError, AttributeError) as e:
+            raw, error = "", public_error(e)
         finally:
             if own:
                 client.close()
