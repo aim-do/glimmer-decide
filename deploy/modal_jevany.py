@@ -14,9 +14,13 @@ JevAny's own HTTP server has no authentication, so this file loads the model in-
 (JevModel) and serves it behind that token:
 
   POST /decide {"state": {...}, "instructions": "...", "criteria": {label: meaning}, "image": <data URL>?}
-    -> {"choice": label, "probabilities": {label: p}, "latency_ms": model time}
+    -> {"choice": label, "probabilities": {label: p}, "latency_ms": model time, "run": name | null}
+
+JEVANY_RUN=<name> (in .env when Start deploys) serves a fine-tuned run from the Volume
+(runs/<name>/model, made by deploy/modal_jevany_train.py) instead of the released adapter.
 """
 import os
+import re
 
 import modal
 from pydantic import BaseModel, Field
@@ -27,6 +31,11 @@ BASE = "meta-models/Muse-Glimmer-30B"
 BASE_REV = "a4e59da52a7bc87ae7251dd5545c0dd437c44b68"     # pinned by the adapter's release-manifest.json
 JEVANY_REV = "75aa500d99878af94beca49bd89382cbee46e424"   # JevAny v0.3.0, the adapter's release
 GPU = os.environ.get("JEVANY_GPU") or "H100"              # 59 GB of bf16 weights: any 80 GB card
+RUN_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")       # fine-tuned runs live in /cache/runs/<name>
+RUN = os.environ.get("JEVANY_RUN", "").strip()            # empty = the released adapter
+if RUN and not RUN_NAME.fullmatch(RUN):
+    raise ValueError(f"JEVANY_RUN={RUN!r} is not a run name (lowercase letters, digits, . _ -)")
+CHECKPOINT = f"/cache/runs/{RUN}/model" if RUN else f"{ADAPTER}@{ADAPTER_REV}"
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -62,7 +71,9 @@ class DecideRequest(BaseModel):
     image=image,
     gpu=GPU,
     volumes={"/cache": weights},
-    secrets=[modal.Secret.from_name("glimmer-decide-auth")],
+    # The run name travels into the container as an env var, so CHECKPOINT resolves the same there.
+    secrets=[modal.Secret.from_name("glimmer-decide-auth"),
+             *([modal.Secret.from_dict({"JEVANY_RUN": RUN})] if RUN else [])],
     memory=16384,              # the bf16 base passes through host RAM (~60 GB) on its way to the GPU
     scaledown_window=300,      # idle 5 min -> container stops, billing stops
     max_containers=1,          # never fan out to several GPUs by accident
@@ -80,9 +91,12 @@ class JevAnyService:
         from jevany.runtime import JevModel
         from PIL import Image
 
+        if RUN and not os.path.isfile(os.path.join(CHECKPOINT, "head.pt")):
+            raise RuntimeError(f"JEVANY_RUN={RUN}: no such run in the jevany-weights Volume "
+                               f"(runs/{RUN}/model); train it first or clear JEVANY_RUN in .env")
         # bf16 and unmerged: JevAny's default merges the LoRA in fp32, which first loads a 120 GB
         # base that no 80 GB card holds. Unmerged bf16 is a little slower and fits.
-        self.model = JevModel.from_pretrained(f"{ADAPTER}@{ADAPTER_REV}", device="cuda",
+        self.model = JevModel.from_pretrained(CHECKPOINT, device="cuda",
                                               options=LoadOptions(dtype=torch.bfloat16, merge=False))
         weights.commit()           # keep anything this load had to fetch (when download() was skipped)
         self.media = tempfile.mkdtemp(prefix="jevany-media-")
@@ -104,7 +118,7 @@ class JevAnyService:
             out = self.model(request)
         ans = out["answers"]["action"]
         return {"choice": ans["choice"], "probabilities": ans["probabilities"],
-                "latency_ms": out.get("latency_ms")}
+                "latency_ms": out.get("latency_ms"), "run": RUN or None}
 
     @modal.asgi_app()
     def web(self):
@@ -127,7 +141,7 @@ class JevAnyService:
         @api.get("/health")
         def health(authorization: str | None = Header(None)):
             check(authorization)
-            return {"ok": True, "model": ADAPTER, "base": BASE, "gpu": GPU}
+            return {"ok": True, "model": ADAPTER, "run": RUN or None, "base": BASE, "gpu": GPU}
 
         @api.post("/decide")
         def decide(req: DecideRequest, authorization: str | None = Header(None)):

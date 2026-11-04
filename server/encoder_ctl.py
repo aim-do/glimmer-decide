@@ -23,11 +23,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
+from dotenv import dotenv_values
 
 from .config import Settings
 
 ROOT = Path(__file__).resolve().parent.parent
+ENV_FILE = ROOT / ".env"
 STATUS_TTL_S = 5.0
+# Read by the deploy files while `modal deploy` runs (GPU type, which JevAny run to serve).
+DEPLOY_KEYS = ("ENCODER_GPU", "JEVANY_GPU", "JEVANY_RUN")
 
 
 @dataclass(frozen=True)
@@ -64,8 +68,19 @@ class Busy(ControlError):
     status = 409
 
 
+def deploy_env(env_file: Path | None = None) -> dict[str, str]:
+    """The deploy-time keys as .env has them now, so editing .env (JEVANY_RUN=...) and pressing
+    Start needs no server restart. Keys that .env does not mention keep their current values."""
+    env_file = env_file or ENV_FILE
+    try:
+        fresh = dotenv_values(env_file) if env_file.is_file() else {}
+    except OSError:
+        fresh = {}
+    return {k: (fresh[k] or "").strip() for k in DEPLOY_KEYS if k in fresh}
+
+
 def run_modal(args: list[str], timeout: float) -> subprocess.CompletedProcess:
-    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+    env = {**os.environ, **deploy_env(), "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
     return subprocess.run([sys.executable, "-m", "modal", *args], cwd=ROOT, env=env,
                           capture_output=True, text=True, encoding="utf-8", errors="replace",
                           timeout=timeout)

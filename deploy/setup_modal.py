@@ -27,11 +27,13 @@ APP, CLS = "glimmer-decide-metaencoder", "MetaEncoderService"
 JEVANY_FILE = ROOT / "deploy" / "modal_jevany.py"
 JEVANY_APP, JEVANY_CLS = "glimmer-decide-jevany", "JevAnyService"
 APPS = (APP, JEVANY_APP)
-CLI_ENV = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
 
 
 def modal_cli(*args: str, capture: bool = False) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, "-m", "modal", *args], cwd=ROOT, env=CLI_ENV,
+    # The environment is read per call, after __main__ loaded .env: ENCODER_GPU, JEVANY_GPU and
+    # JEVANY_RUN from .env then reach `modal deploy`, which reads them.
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+    return subprocess.run([sys.executable, "-m", "modal", *args], cwd=ROOT, env=env,
                           capture_output=capture, text=True, encoding="utf-8", errors="replace")
 
 

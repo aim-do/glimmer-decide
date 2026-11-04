@@ -115,6 +115,33 @@ Metrics: accuracy, accuracy when the right object is present, **false pick when 
 ask-view rate, parse failures, latency; MetaEncoder rows also keep the full distribution
 for calibrating a refusal threshold. Hold out whole scenes, not neighbouring frames.
 
+## Fine-tuning JevAny on your frames
+
+JevAny is the decider you can train, and the samples you save are its training data. Training
+runs on a Modal GPU with JevAny's own trainer, continuing from the released adapter (LoRA r8 +
+pointer head; the 30B base stays frozen), on the exact text the page sends at decision time.
+It needs `python deploy/setup_modal.py jevany` once (the weights it trains on).
+
+```bash
+modal run deploy/modal_jevany_train.py --smoke        # one generated frame, 20 steps: does training run? ~2.5 min, ~$0.2
+modal run deploy/modal_jevany_train.py --run desk-v1  # every sample in data/captures.jsonl, 3 epochs
+```
+
+A run prints the loss per record and its decision on the training frames before and after
+(also saved to `eval/results/train-<run>.json`), and keeps the new adapter in the
+`jevany-weights` Volume under `runs/<run>/`. To use it in the page: `JEVANY_RUN=desk-v1` in
+`.env`, then **Stop** and **Start** the JevAny GPU; its answers then end with *fine-tuned run:
+desk-v1*. An empty `JEVANY_RUN` goes back to the released adapter. Flags: `--data`, `--epochs`,
+`--steps`, `--lr`, `--head-lr`, `--accum` (`--help` lists them). The before/after numbers are
+on the training frames themselves: judge a run with `eval.run_eval` on scenes it never saw.
+
+First smoke test (2026-11-04, H100): a grey frame with no desk object, goal *Cut the paper
+along a straight line*, correct answer *none*. The released adapter said scissors 0.88 (none
+0.08), the same as the live service on that frame. After 20 steps at lr 1e-4 the loss went
+2.34 → 1.10 → 0.06 → 0.00 (from step 4) and the answer became none 1.00; peak GPU memory
+58 GB, 2.5 min and ~$0.2 in all. That proves the pipeline trains and serves what it trained,
+nothing more: one frame learned by heart says nothing about other frames.
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -158,7 +185,7 @@ on localhost only by default, because every request spends credits.
 |---|---|---|
 | 1 | MetaEncoder + Glimmer + SAM 3.1 on camera frames, no training; labeling UI; eval with blind ablation | done, smoke-tested on 2 public photos |
 | 2 | Collect & label 100-300 frames on real desks; measure MetaEncoder vs Glimmer (accuracy, false pick when absent, latency) | next |
-| 3 | Adapt: Glimmer option-logit scoring + LoRA (Fireworks free SFT until 2026-11-30, or Modal), or a small head on frozen MetaEncoder features | |
+| 3 | Adapt: fine-tune JevAny on the labeled frames (Modal); later maybe a Clef-style joint head on Glimmer, or a small head on frozen MetaEncoder features | JevAny training code + one-frame GPU smoke test done (2026-11-04); waits for labeled frames |
 
 ### First smoke test (2026-10-28, not an eval)
 
@@ -184,9 +211,11 @@ image it still picked by the goal text. That is what the labeled eval set has to
 server/   FastAPI app (python -m server); encoder.py (MetaEncoder decider), jevany.py (JevAny decider),
           encoder_ctl.py (GPU Start/Stop), certs.py (self-signed HTTPS for phones), decision.py (Glimmer),
           sam.py, tasks.py
-deploy/   Modal services for MetaEncoder and JevAny + setup_modal.py (all / jevany / status / start / stop)
+deploy/   Modal services for MetaEncoder and JevAny + setup_modal.py (all / jevany / status / start / stop),
+          modal_jevany_train.py (JevAny fine-tuning on a GPU)
 domains/  action sets (desk.json)
 web/      vanilla-JS camera client
+train/    saved samples -> JevAny training rows
 eval/     offline evaluation
 tests/    pytest (mock mode, no network): python -m pytest
 ```

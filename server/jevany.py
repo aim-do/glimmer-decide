@@ -10,7 +10,8 @@ POST /decide {"state", "instructions", "criteria": {label: meaning}, "image"?}
   -> {"choice": label, "probabilities": {label: p}, "latency_ms": model time}.
 
 Its training data was text decisions only; how well it reads camera frames is exactly what
-the labeled eval set measures.
+the labeled eval set measures. deploy/modal_jevany_train.py fine-tunes it on frames saved in
+the page (training_row below builds those records from the same text as request_body).
 """
 from __future__ import annotations
 
@@ -24,19 +25,38 @@ from .types import Decision, finish, mock_letter, public_error
 
 INSTRUCTIONS = "Which object visible in the image should the user use to achieve the goal?"
 MODEL_ID = "SimpleJev/JevAny-Muse-Glimmer-30B-LoRA"
+QUESTION = "action"   # the question id the GPU service asks; training rows label the same one
+
+
+def _state(goal: str, has_image: bool) -> dict:
+    return {"user goal": goal.strip(),
+            "camera": ("the attached photo shows what is in front of the user" if has_image
+                       else "no camera frame is available")}
 
 
 def request_body(domain: Domain, goal: str, image_data_url: str | None) -> dict:
     """The decision in JevAny's own shape: a state, an instruction and {option label: meaning}.
     Labels are the domain's short names ("binder clip", "none", "unclear view")."""
-    state = {"user goal": goal.strip(),
-             "camera": ("the attached photo shows what is in front of the user" if image_data_url
-                        else "no camera frame is available")}
-    body = {"state": state, "instructions": INSTRUCTIONS,
+    body = {"state": _state(goal, bool(image_data_url)), "instructions": INSTRUCTIONS,
             "criteria": {a.name: a.detail for a in domain.actions}}
     if image_data_url is not None:
         body["image"] = image_data_url
     return body
+
+
+def training_row(domain: Domain, goal: str, image_uri: str, gold: list[str]) -> dict:
+    """One labelled JevAny training record for a saved frame: the same state, instructions and
+    option labels the page sends at decision time, plus the right answer. Several acceptable
+    actions become a soft target split evenly between them. Unknown action ids raise KeyError."""
+    names = list(dict.fromkeys(domain.by_id(g).name for g in gold))
+    if not names:
+        raise ValueError("a training row needs at least one correct action")
+    question = {"type": "choice", "instructions": INSTRUCTIONS,
+                "criteria": {a.name: a.detail for a in domain.actions}, "label": names[0]}
+    if len(names) > 1:
+        question["target"] = {n: 1.0 for n in names}
+    return {"state": _state(goal, True), "media": [{"type": "image", "uri": image_uri}],
+            "questions": {QUESTION: question}}
 
 
 def _remote(settings: Settings, body: dict) -> dict:
@@ -76,6 +96,8 @@ def decide_jevany(settings: Settings, domain: Domain, goal: str, image_data_url:
     raw = "\n".join(f"{a.name:14s} p={probs[a.id]:.3f}" for a in order)
     if data.get("latency_ms") is not None:
         raw += f"\n(model time on the GPU: {data['latency_ms']} ms)"
+    if data.get("run"):
+        raw += f"\n(fine-tuned run: {data['run']})"
     # The model's own pick, no margin gate: its probabilities come from a trained head,
     # and a refusal threshold belongs on the labeled eval set, not here.
     return finish(domain, chosen.id, raw, latency_ms, blind, None, "jevany", probs)
