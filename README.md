@@ -1,5 +1,7 @@
 # Glimmer Decide
 
+[![Glimmer Decide: promo video (2:38), click to watch on YouTube](https://img.youtube.com/vi/DawY6e_nZxo/maxresdefault.jpg)](https://youtu.be/DawY6e_nZxo)
+
 A camera test bench for open-weight **decision models**, and a way to train your own.
 
 Point a camera at a desk (or drop in a photo), say what you want to do, and get **one object
