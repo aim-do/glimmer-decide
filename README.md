@@ -195,3 +195,10 @@ web/      vanilla-JS camera client
 eval/     offline evaluation
 tests/    pytest (mock mode, no network): python -m pytest
 ```
+
+## License
+
+The code here is MIT-licensed, see [LICENSE](LICENSE). The models are not part of the repo
+and keep their own terms: you accept MetaEncoder's license on its Hugging Face page before
+the weights download, and Glimmer and SAM 3.1 are used through OpenRouter and the Meta
+Model API under those services' terms.
