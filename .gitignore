@@ -3,6 +3,7 @@
 !.env.example
 *.pem
 *.key
+.certs/
 .venv/
 __pycache__/
 .pytest_cache/

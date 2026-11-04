@@ -7,3 +7,5 @@ numpy==2.5.4
 # MetaEncoder GPU on Modal: setup script and the page's Start/Stop buttons
 modal==1.6.3
 huggingface_hub==2.3.0
+# python -m server --https: self-signed certificate so phones on the same Wi-Fi get the camera
+cryptography==50.0.2

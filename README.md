@@ -102,8 +102,11 @@ python deploy/setup_modal.py stop     # GPU off, app undeployed
 |---|---|---|
 | Laptop / desktop | webcam on http://localhost:8000 | browsers allow the camera on localhost |
 | Any computer | **Photo** button, **drag an image** onto the frame, or **paste** one (Ctrl+V) | no camera needed — screenshots and saved photos work |
-| Phone | `tailscale serve --bg 8000` on the computer, then `https://<computer>.<tailnet>.ts.net` on the phone | phones need HTTPS for the camera; [Tailscale](https://tailscale.com) gives it with no config |
-| Phone on plain Wi-Fi | `python -m server --host 0.0.0.0`, open `http://<computer-ip>:8000` | camera is blocked on plain http, **Photo** still works; anyone on the network can then spend your credits |
+| Phone on the same Wi-Fi | `python -m server --https`, then open the `https://<computer-ip>:8000` address it prints | the certificate is self-signed, so the phone warns once: *Advanced → Proceed* (iPhone: *Show Details → visit this website*); after that the live camera works. Anyone on that Wi-Fi can open the page and spend your credits |
+| Phone anywhere | `tailscale serve --bg 8000` on the computer, then `https://<computer>.<tailnet>.ts.net` on the phone | real certificate, no warning, only your own devices ([Tailscale](https://tailscale.com) on both) |
+
+Phones get the camera only over HTTPS. `--host 0.0.0.0` without `--https` also works, but then
+only **Photo** does (it still opens the phone's camera app).
 
 Then type the goal (or tap 🎤 where the browser supports speech), pick the decider —
 MetaEncoder, Glimmer, or **Both** to compare — and press **What should I use?**
@@ -129,6 +132,8 @@ for calibrating a refusal threshold. Hold out whole scenes, not neighbouring fra
 | Symptom | Fix |
 |---|---|
 | Camera does not start | Use http://localhost (not the IP) on the computer, allow the permission, or use Photo / drag / paste. |
+| Phone: *This site can't be reached* | Phone and computer on the same Wi-Fi (not a guest or hotspot network, VPN off on the phone); type the exact address the terminal prints. Windows: when the firewall asks, allow Python (tick *Public* too if your Wi-Fi is marked Public). Android: turn mobile data off for the test (some phones route traffic over it when Wi-Fi looks weak) and allow Chrome *Nearby devices* (Settings → Apps → Chrome → Permissions). Chrome or another non-Safari browser on iPhone: Settings → that browser → *Local Network* on. Some routers isolate Wi-Fi devices from each other: then use Tailscale. |
+| Phone: *Your connection is not private* | Expected with `--https` (self-signed certificate): *Advanced → Proceed*. It comes back when the computer's address changes and a new certificate is made. |
 | Panel says *Not set up yet* | Run `python deploy/setup_modal.py all`; the page picks the result up without a restart. |
 | `GatedRepoError` during setup | Accept the terms on the model page and give the HF token gated-repo read access (step 1). |
 | Start ends with HTTP 401 | `.env` and Modal disagree on `ENCODER_TOKEN`: rerun `python deploy/setup_modal.py all`. |
@@ -188,7 +193,7 @@ image it still picked by the goal text. That is what the labeled eval set has to
 
 ```
 server/   FastAPI app (python -m server); encoder.py (MetaEncoder decider), encoder_ctl.py (GPU Start/Stop),
-          decision.py (Glimmer), sam.py, tasks.py
+          certs.py (self-signed HTTPS for phones), decision.py (Glimmer), sam.py, tasks.py
 deploy/   Modal service for MetaEncoder + setup_modal.py (all / status / start / stop)
 domains/  action sets (desk.json)
 web/      vanilla-JS camera client

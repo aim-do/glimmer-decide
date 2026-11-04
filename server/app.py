@@ -1,11 +1,13 @@
 """HTTP server: serves the camera web app, the decision API and MetaEncoder GPU control.
 
 Run:  python -m server            (or: python -m uvicorn server.app:app --host 127.0.0.1 --port 8000)
-(localhost only: the API spends paid credits; reach it from a phone via `tailscale serve`).
+(localhost by default: the API spends paid credits; phones: `python -m server --https` on the
+same Wi-Fi, or `tailscale serve`).
 """
 from __future__ import annotations
 
 import base64
+import asyncio
 import binascii
 import json
 import logging
@@ -64,8 +66,17 @@ def _reload_encoder_env() -> None:
 
 encoder_ctl = EncoderControl(lambda: settings, _reload_encoder_env)
 
+def _quiet_client_resets(loop, context) -> None:
+    """Windows' Proactor loop reports a browser resetting a finished keep-alive TLS connection as an
+    ERROR with a traceback (every status poll under --https). The request already succeeded: drop it."""
+    if isinstance(context.get("exception"), ConnectionResetError):
+        return
+    loop.default_exception_handler(context)
+
+
 @asynccontextmanager
 async def _lifespan(_app):
+    asyncio.get_running_loop().set_exception_handler(_quiet_client_resets)
     yield
     pool.shutdown(wait=False, cancel_futures=True)
 
