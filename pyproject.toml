@@ -1,5 +1,6 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]   # `pytest` alone (as CI runs it) must import server/, train/, tests/ like `python -m pytest`
 
 [tool.ruff]
 target-version = "py313"
