@@ -8,6 +8,8 @@ from __future__ import annotations
 import logging
 from dataclasses import asdict, dataclass
 
+import httpx
+
 from .tasks import ASK_VIEW, NONE, Domain
 
 log = logging.getLogger("glimmer-decide")
@@ -36,6 +38,8 @@ def public_error(e: BaseException) -> str:
     status = getattr(getattr(e, "response", None), "status_code", None)
     if status:
         return f"upstream error (HTTP {status})"
+    if isinstance(e, httpx.TimeoutException):
+        return "upstream timed out - try again"
     return f"upstream error ({type(e).__name__})"
 
 
@@ -44,7 +48,7 @@ def finish(domain: Domain, action_id: str | None, raw: str, latency_ms: int, bli
     if action_id is None:
         return Decision(None, None, "Could not get a decision - try again.", None,
                         raw, latency_ms, blind, error, decider, probs)
-    letter = next(l for l, a in domain.letters() if a.id == action_id)
+    letter = next(key for key, a in domain.letters() if a.id == action_id)
     action = domain.by_id(action_id)
     concept = action.concept if action.id not in (NONE, ASK_VIEW) else None
     return Decision(action.id, letter, action.hint, concept, raw, latency_ms, blind, error, decider, probs)

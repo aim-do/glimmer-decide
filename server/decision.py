@@ -12,9 +12,11 @@ import time
 
 import httpx
 
+from . import upstream
 from .config import Settings
 from .tasks import Domain
-from .types import Decision, finish, mock_letter as _mock_letter, public_error
+from .types import Decision, finish, public_error
+from .types import mock_letter as _mock_letter
 
 __all__ = ["Decision", "finish", "build_messages", "parse_letter", "decide"]
 
@@ -63,7 +65,8 @@ def parse_letter(text: str, n_options: int) -> str | None:
 
 
 def decide(settings: Settings, domain: Domain, goal: str,
-           image_data_url: str | None, client: httpx.Client | None = None) -> Decision:
+           image_data_url: str | None, client: httpx.Client | None = None,
+           *, deadline: float | None = None) -> Decision:
     letters = dict(domain.letters())
     blind = image_data_url is None
     t0 = time.perf_counter()
@@ -71,7 +74,7 @@ def decide(settings: Settings, domain: Domain, goal: str,
     if not settings.glimmer_enabled:
         return finish(domain, None, "", 0, blind, "Glimmer is not configured (GLIMMER_API_KEY)", "glimmer")
     if settings.mock:
-        letter = _mock_letter(domain, goal, not blind)
+        letter: str | None = _mock_letter(domain, goal, not blind)
         raw = f"(mock)\nANSWER: {letter}"
         error = None
     else:
@@ -87,7 +90,7 @@ def decide(settings: Settings, domain: Domain, goal: str,
             body["reasoning"] = {"effort": settings.glimmer_reasoning}
         headers = {"Authorization": f"Bearer {settings.glimmer_api_key}"}
         own = client is None
-        client = client or httpx.Client(timeout=120)
+        client = client or upstream.client(deadline, 120)    # 120 s, or less near the request deadline
         try:
             r = client.post(f"{settings.glimmer_base_url}/chat/completions", json=body, headers=headers)
             r.raise_for_status()

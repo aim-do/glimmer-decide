@@ -33,10 +33,10 @@ def test_request_body_is_jevanys_closed_set_shape():
 def fake_post(monkeypatch, response):
     sent = {}
 
-    def post(url, json, headers, timeout, follow_redirects):
-        sent.update(url=url, body=json, auth=headers["Authorization"])
+    def post(url, *, json, headers, deadline, cap):
+        sent.update(url=url, body=json, auth=headers["Authorization"], deadline=deadline, cap=cap)
         return response
-    monkeypatch.setattr(jevany.httpx, "post", post)
+    monkeypatch.setattr(jevany.upstream, "post", post)
     return sent
 
 

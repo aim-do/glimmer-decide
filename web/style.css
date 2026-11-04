@@ -44,6 +44,8 @@ select, input[type=text] {
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chips button { font-size: 13px; padding: 5px 9px; border-radius: 99px; border: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; }
 .results { display: grid; gap: 10px; }
+.results.stale .result { opacity: .45; }
+.stale-note { margin: 0; font-size: 13px; color: var(--muted); }
 .result { background: var(--panel); border-radius: 12px; padding: 12px; }
 .result .who { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
 .result .who .time { text-transform: none; letter-spacing: 0; color: var(--text); font-variant-numeric: tabular-nums; }

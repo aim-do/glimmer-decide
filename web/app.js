@@ -4,7 +4,7 @@ const MAX_SIDE = 1024;
 const API_TIMEOUT_MS = 260_000;   // server deadline is 240 s; the client waits a little longer
 
 const state = { domains: [], frameUrl: null, lastDecision: null, stream: null,
-                decideSeq: 0, saving: false, gpuTimers: {} };
+                decideSeq: 0, saving: false, gpuTimers: {}, boxesShown: false };
 const sec = (ms) => `${(ms / 1000).toFixed(1)} s`;
 
 // The server requires this header on POSTs that spend money (blocks localhost CSRF).
@@ -36,11 +36,26 @@ async function api(path, body) {
 }
 
 function clearDecision() {
-  // Only the model's prediction goes stale on new input. The human's gold
+  // New input (goal, frame, domain) makes the model's answer stale. The human's gold
   // ticks are never cleared here - the labeler owns them.
   state.lastDecision = null;
   const pred = $("predicted");
   if (pred) pred.textContent = "";
+  markStale("These answers were for the previous goal or frame. Press “What should I use?” again.");
+  if (state.boxesShown) {          // the SAM box belonged to the old answer
+    state.boxesShown = false;
+    if (state.frameUrl) redrawFrame();
+  }
+}
+
+// Old answers stay readable, but dimmed and labelled, so they never pass for answers to the
+// goal and frame now on screen.
+function markStale(why) {
+  $("took").textContent = "";
+  const results = $("results");
+  if (!results.childElementCount || results.classList.contains("stale")) return;
+  results.classList.add("stale");
+  results.prepend(el("p", "stale-note", why));
 }
 
 // ---- camera / frame ---------------------------------------------------------
@@ -166,7 +181,7 @@ async function onDecide() {
   tick();
   const timer = setInterval(tick, 100);
   $("took").textContent = "";
-  let answered = false;
+  let answered = false, stale = false;
   try {
     if (state.frameUrl) await redrawFrame();
     const r = await api("/api/decide", {
@@ -174,18 +189,27 @@ async function onDecide() {
       decider: $("decider").value, highlight: true,
     });
     if (seq !== state.decideSeq) return;   // a newer request superseded this one
-    state.lastDecision = r.decisions.find((d) => d.action) || r.decisions[0];
+    // The goal or the frame may have changed while the models thought: then the answer is
+    // shown as stale, is not the prediction a saved sample records, and draws no box.
+    const current = $("goal").value.trim() === goal && (blind || state.frameUrl === image);
+    state.lastDecision = current ? (r.decisions.find((d) => d.action) || r.decisions[0]) : null;
     renderDecisions(r.decisions, r.highlight, r.highlight_decider);
-    if (r.highlight?.boxes?.length) drawBoxes(r.highlight.boxes);
+    if (!current) {
+      markStale("The goal or the frame changed while the models were thinking. Ask again.");
+    } else if (r.highlight?.boxes?.length) {
+      drawBoxes(r.highlight.boxes);
+      state.boxesShown = true;
+    }
     answered = true;
+    stale = !current;
   } catch (e) {
     if (seq !== state.decideSeq) return;
     renderDecisions([{ decider: "error", hint: "Request failed", error: String(e.message || e), raw: "", latency_ms: 0 }]);
   } finally {
     clearInterval(timer);
     if (seq === state.decideSeq) {
-      // The total stays on screen until the next question (the button resets).
-      $("took").textContent = `${answered ? "Answered" : "Failed"} in ${sec(Date.now() - t0)}`;
+      // The total stays on screen until the next question or new input (the button resets).
+      $("took").textContent = stale ? "" : `${answered ? "Answered" : "Failed"} in ${sec(Date.now() - t0)}`;
       $("decide").disabled = false;
       $("decide").textContent = "What should I use?";
     }
@@ -204,6 +228,7 @@ function el(tag, cls, text) {
 
 function renderDecisions(decisions, highlight, highlightDecider) {
   const names = Object.fromEntries(state.domains.flatMap((d) => d.actions).map((a) => [a.id, a.name]));
+  $("results").classList.remove("stale");
   $("results").replaceChildren(...decisions.map((d) => {
     const card = el("div", "result");
     const who = el("div", "who");
@@ -247,6 +272,8 @@ async function onSave() {
   if (state.saving) return;
   // Read the human labels BEFORE grabFrame(): freezing a live frame clears
   // the current decision state, which must not wipe the labeler's ticks.
+  // `predicted` is read AFTER it on purpose: Decide already froze the frame it answered, so
+  // its prediction survives here; a frame grabbed only now was never decided, so null is right.
   const gold = [...document.querySelectorAll("#gold input:checked")].map((cb) => cb.value);
   const goal = $("goal").value.trim();
   const image = state.frameUrl || grabFrame();
@@ -394,7 +421,7 @@ async function init() {
   });
   state.domains = domains;
   $("domain").replaceChildren(...domains.map((d) => new Option(d.title, d.id)));
-  $("domain").addEventListener("change", renderDomain);
+  $("domain").addEventListener("change", () => { renderDomain(); clearDecision(); });
   renderDomain();
   $("decide").addEventListener("click", onDecide);
   $("save").addEventListener("click", onSave);

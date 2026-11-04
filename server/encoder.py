@@ -21,6 +21,7 @@ from collections.abc import Callable
 import httpx
 import numpy as np
 
+from . import upstream
 from .config import Settings
 from .tasks import ASK_VIEW, NONE, Domain
 from .types import Decision, finish, mock_letter, public_error
@@ -52,12 +53,12 @@ def candidate_texts(domain: Domain, style: str) -> list[str]:
     return [a.name for a in domain.actions]
 
 
-def remote_embed(settings: Settings, items: list[dict]) -> np.ndarray:
+def remote_embed(settings: Settings, items: list[dict], deadline: float | None = None) -> np.ndarray:
     headers = {"Authorization": f"Bearer {settings.encoder_token}"}
-    # A cold GPU container takes minutes to load 60 GB of weights; Modal answers long
-    # requests with a redirect to poll, hence the generous timeout and follow_redirects.
-    r = httpx.post(f"{settings.encoder_url}/embed", json={"items": items}, headers=headers,
-                   timeout=900, follow_redirects=True)
+    # A cold GPU container takes minutes to load 60 GB of weights; Modal answers long requests
+    # with a redirect to poll, hence 900 s and redirects, cut to the request deadline when given.
+    r = upstream.post(f"{settings.encoder_url}/embed", json={"items": items}, headers=headers,
+                      deadline=deadline, cap=900)
     r.raise_for_status()
     data = r.json()
     return np.stack([np.frombuffer(base64.b64decode(e), dtype=np.float32) for e in data["embeddings"]])
@@ -88,18 +89,26 @@ def mock_embed_factory(domain: Domain, goal: str, has_image: bool, style: str) -
 
 
 def _candidate_matrix(embed: EmbedFn, texts: list[str], namespace: str) -> np.ndarray:
+    """Option embeddings, cached. The answer is built from this call's own copies (hits taken
+    under the lock, fresh vectors kept locally), so an eviction by this or another request can
+    never turn a cache miss into an error. Eviction drops the oldest entries, one at a time."""
     keys = [f"{namespace}|{t}" for t in texts]
     with _cache_lock:
-        missing = [t for t, k in zip(texts, keys) if k not in _cache]
+        found = {k: _cache[k] for k in keys if k in _cache}
+    missing = [t for t, k in zip(texts, keys) if k not in found]
     if missing:
         vecs = embed([{"text": t} for t in missing])
+        if len(vecs) != len(missing):
+            raise ValueError(f"embedding count mismatch: asked {len(missing)}, got {len(vecs)}")
+        fresh = {f"{namespace}|{t}": v for t, v in zip(missing, vecs)}
+        found.update(fresh)
         with _cache_lock:
-            for t, v in zip(missing, vecs):
-                if len(_cache) >= _cache_max:
-                    _cache.clear()
-                _cache[f"{namespace}|{t}"] = v
-    with _cache_lock:
-        return np.stack([_cache[k] for k in keys])
+            for k, v in fresh.items():
+                _cache.pop(k, None)
+                while len(_cache) >= _cache_max:
+                    _cache.pop(next(iter(_cache)))
+                _cache[k] = v
+    return np.stack([found[k] for k in keys])
 
 
 def softmax(x: np.ndarray, tau: float) -> np.ndarray:
@@ -111,7 +120,7 @@ def softmax(x: np.ndarray, tau: float) -> np.ndarray:
 
 
 def decide_encoder(settings: Settings, domain: Domain, goal: str, image_data_url: str | None,
-                   embed: EmbedFn | None = None) -> Decision:
+                   embed: EmbedFn | None = None, *, deadline: float | None = None) -> Decision:
     blind = image_data_url is None
     if embed is not None:
         namespace = f"custom:{id(embed)}"   # never mix vectors from different embedders
@@ -121,7 +130,8 @@ def decide_encoder(settings: Settings, domain: Domain, goal: str, image_data_url
     elif settings.mock:
         embed, namespace = mock_embed_factory(domain, goal, not blind, settings.encoder_style), "mock"
     else:
-        embed, namespace = (lambda items: remote_embed(settings, items)), settings.encoder_url
+        # Both calls (options when not cached, then the task) share the request's one deadline.
+        embed, namespace = (lambda items: remote_embed(settings, items, deadline)), settings.encoder_url
     namespace = f"{namespace}|{domain.id}|{settings.encoder_style}"
 
     t0 = time.perf_counter()

@@ -19,6 +19,7 @@ import time
 
 import httpx
 
+from . import upstream
 from .config import Settings
 from .tasks import Domain
 from .types import Decision, finish, mock_letter, public_error
@@ -59,12 +60,12 @@ def training_row(domain: Domain, goal: str, image_uri: str, gold: list[str]) -> 
             "questions": {QUESTION: question}}
 
 
-def _remote(settings: Settings, body: dict) -> dict:
+def _remote(settings: Settings, body: dict, deadline: float | None = None) -> dict:
     headers = {"Authorization": f"Bearer {settings.encoder_token}"}   # one token for both GPU services
     # A cold GPU container loads 60 GB of weights first; Modal answers long requests with a
-    # redirect to poll, hence the generous timeout and follow_redirects.
-    r = httpx.post(f"{settings.jevany_url}/decide", json=body, headers=headers,
-                   timeout=900, follow_redirects=True)
+    # redirect to poll, hence the generous 900 s budget, cut to the request deadline when given.
+    r = upstream.post(f"{settings.jevany_url}/decide", json=body, headers=headers,
+                      deadline=deadline, cap=900)
     r.raise_for_status()
     return r.json()
 
@@ -76,14 +77,15 @@ def _mock(domain: Domain, goal: str, has_image: bool) -> dict:
             "probabilities": {a.name: 0.9 if a is target else rest for a in domain.actions}}
 
 
-def decide_jevany(settings: Settings, domain: Domain, goal: str, image_data_url: str | None) -> Decision:
+def decide_jevany(settings: Settings, domain: Domain, goal: str, image_data_url: str | None,
+                  *, deadline: float | None = None) -> Decision:
     blind = image_data_url is None
     if not settings.jevany_enabled:
         return finish(domain, None, "", 0, blind, "JevAny is not configured (JEVANY_URL)", "jevany")
     t0 = time.perf_counter()
     try:
         data = (_mock(domain, goal, not blind) if settings.mock
-                else _remote(settings, request_body(domain, goal, image_data_url)))
+                else _remote(settings, request_body(domain, goal, image_data_url), deadline))
         by_name = {a.name: a for a in domain.actions}
         chosen = by_name[data["choice"]]          # an unknown label is an upstream error
         dist = data["probabilities"]

@@ -11,6 +11,7 @@ import time
 
 import httpx
 
+from . import upstream
 from .config import Settings
 from .types import public_error
 
@@ -22,7 +23,7 @@ def parse_boxes(line: str) -> list[dict]:
     for obj_id, fields in BOX_RE.findall(line or ""):
         kv = dict(f.split("=", 1) for f in fields.split(";") if "=" in f)
         try:
-            box = {"id": int(obj_id),
+            box: dict[str, int | float] = {"id": int(obj_id),
                    "x1": int(float(kv["x1"])), "y1": int(float(kv["y1"])),
                    "x2": int(float(kv["x2"])), "y2": int(float(kv["y2"])),
                    "w": int(float(kv["w"])), "h": int(float(kv["h"]))}
@@ -53,7 +54,7 @@ def _output_text(resp: object) -> str:
 
 
 def segment(settings: Settings, concept: str, image_data_url: str,
-            client: httpx.Client | None = None) -> dict:
+            client: httpx.Client | None = None, *, deadline: float | None = None) -> dict:
     t0 = time.perf_counter()
     body = {
         "model": settings.sam_model,
@@ -65,7 +66,7 @@ def segment(settings: Settings, concept: str, image_data_url: str,
     }
     headers = {"Authorization": f"Bearer {settings.meta_api_key}"}
     own = client is None
-    client = client or httpx.Client(timeout=60)
+    client = client or upstream.client(deadline, 60)     # 60 s, or what the request has left
     try:
         r = client.post(f"{settings.meta_base_url}/responses", json=body, headers=headers)
         r.raise_for_status()

@@ -6,8 +6,8 @@ same Wi-Fi, or `tailscale serve`).
 """
 from __future__ import annotations
 
-import base64
 import asyncio
+import base64
 import binascii
 import json
 import logging
@@ -15,11 +15,12 @@ import re
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 from contextlib import asynccontextmanager
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from dataclasses import replace
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import httpx
 from dotenv import dotenv_values, load_dotenv
@@ -31,7 +32,8 @@ from pydantic import BaseModel, Field, field_validator
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
 
-from .config import DECIDERS as DECIDER_NAMES, load_settings  # noqa: E402
+from .config import DECIDERS as DECIDER_NAMES  # noqa: E402
+from .config import load_settings  # noqa: E402
 from .decision import decide  # noqa: E402
 from .encoder import decide_encoder  # noqa: E402
 from .encoder_ctl import SERVICES, ControlError, EncoderControl  # noqa: E402
@@ -64,7 +66,7 @@ def _reload_service_env() -> None:
     token = (vals.get("ENCODER_TOKEN") or "").strip()
     if not token:
         return
-    changes = {}
+    changes: dict[str, Any] = {}
     for key, field in (("ENCODER_URL", "encoder_url"), ("JEVANY_URL", "jevany_url")):
         url = (vals.get(key) or "").strip().rstrip("/")
         if url.startswith("https://") and url != getattr(settings, field):
@@ -93,7 +95,10 @@ async def _lifespan(_app):
     pool.shutdown(wait=False, cancel_futures=True)
 
 
-pool = ThreadPoolExecutor(max_workers=4)
+# Every upstream call ends by its request's deadline (server/upstream.py), so a worker is never
+# held much past REQUEST_TIMEOUT_S; 8 workers fit two "Compare all" requests (3 deciders each).
+pool = ThreadPoolExecutor(max_workers=8)
+SAM_MIN_S = 2.0   # skip the highlight rather than start it with less time than this left
 app = FastAPI(title="glimmer-decide", lifespan=_lifespan)
 _capture_lock = threading.Lock()
 _warmup_lock = threading.Lock()
@@ -294,10 +299,11 @@ def api_decide(req: DecideRequest):
     # and then answers with a clear error instead of silently switching models.
     names = ([n for n in ("encoder", "jevany", "glimmer") if settings.enabled(n)] or ["glimmer"]
              if which == "both" else [which])
-    futures = [pool.submit(DECIDERS[n], settings, dom, req.goal, req.image) for n in names]
-    # One shared deadline for the whole request, not one per decider. Answers
+    # One shared deadline for the whole request, not one per decider, and it reaches every
+    # upstream call inside them: a stuck GPU or API frees its worker at the deadline. Answers
     # that already finished are kept; only the stragglers become errors.
     deadline = time.monotonic() + settings.request_timeout_s
+    futures = [pool.submit(DECIDERS[n], settings, dom, req.goal, req.image, deadline=deadline) for n in names]
     decisions = []
     for n, f in zip(names, futures):
         try:
@@ -310,12 +316,16 @@ def api_decide(req: DecideRequest):
     primary = next((d for d in decisions if d.action), decisions[0])
     highlight = None
     if req.highlight and primary.concept and req.image and settings.sam_enabled:
-        try:
-            highlight = segment(settings, primary.concept, req.image)
-        except Exception as e:  # SAM must never lose a good decision
-            log.warning("SAM failed: %s", e)
-            highlight = {"concept": primary.concept, "boxes": [], "error": "highlight unavailable",
+        if deadline - time.monotonic() < SAM_MIN_S:   # the deciders used the time: answer without it
+            highlight = {"concept": primary.concept, "boxes": [], "error": "highlight skipped: out of time",
                          "latency_ms": 0}
+        else:
+            try:
+                highlight = segment(settings, primary.concept, req.image, deadline=deadline)
+            except Exception as e:  # SAM must never lose a good decision
+                log.warning("SAM failed: %s", e)
+                highlight = {"concept": primary.concept, "boxes": [], "error": "highlight unavailable",
+                             "latency_ms": 0}
     return {"decisions": [d.to_dict() for d in decisions], "highlight": highlight,
             "highlight_decider": primary.decider}
 
@@ -324,9 +334,12 @@ def api_decide(req: DecideRequest):
 def api_capture(req: CaptureRequest):
     """Save frame + goal for later labeling (eval set / LoRA data in step 2)."""
     raw = _decode_image(req.image)
+    match = DATA_URL_RE.match(req.image)
+    if raw is None or match is None:     # _decode_image already refused these; keeps the types honest
+        raise HTTPException(400, "image must be a base64 data URL (jpeg/png/webp)")
     _domain(req.domain)
     CAPTURES.mkdir(parents=True, exist_ok=True)
-    ext = DATA_URL_RE.match(req.image).group(1).replace("jpeg", "jpg")
+    ext = match.group(1).replace("jpeg", "jpg")
     stem = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:12]
     img_path = CAPTURES / f"{stem}.{ext}"
     tmp = CAPTURES / f".{stem}.tmp"
