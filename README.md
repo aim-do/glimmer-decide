@@ -35,13 +35,19 @@ Built for the Meta Global AI Developer Hackathon, on Meta models only.
 |---|---|---|---|---|
 | **MetaEncoder** (System 1, default) | [facebook/meta-encoder](https://huggingface.co/facebook/meta-encoder): Muse Glimmer 30B contrastively tuned into a bi-encoder ([paper](https://arxiv.org/abs/2610.11316)) | frame + goal and each option are embedded; cosine similarity -> softmax. Option embeddings are cached | ~1.4 s (0.15 s) | your Modal GPU |
 | **JevAny** (System 1, **fine-tunable**) | [JevAny-Muse-Glimmer-30B](https://huggingface.co/SimpleJev/JevAny-Muse-Glimmer-30B-LoRA): a LoRA + pointer head on Muse Glimmer 30B ([JevAny](https://github.com/SimpleJev/JevAny)) | frame + goal + labelled options in one prefill; a small trained head scores the options | ~1.4 s (0.17 s) | your Modal GPU |
-| **Clef-style Glimmer** (System 1, **trained from scratch**, experiment) | [Clef](https://huggingface.co/Cloudflare/clef)'s joint schema head + a fresh LoRA on Muse Glimmer 30B | one prefill; the head scores all options together | — (training only, not in the page yet) | your Modal GPU |
+| **Clef-style Glimmer** (System 1, **not trained yet**, experiment) | [Clef](https://huggingface.co/Cloudflare/clef)'s joint schema head + a fresh LoRA on Muse Glimmer 30B: no released weights, you train it | one prefill; the head scores all options together | — (no trained model yet, not in the page) | your Modal GPU |
 | **Glimmer** (System 2, compare) | [Muse Glimmer 30B](https://huggingface.co/meta-models/Muse-Glimmer-30B) | reasons, then answers `ANSWER: <letter>` | 3–9 s | OpenRouter |
 | Highlight | SAM 3.1 | text concept -> boxes | | Meta Model API |
 
 Speeds are medians on the same 1024×768 camera frames, from a laptop in Europe to warm H100s in
 us-east: the models take ~0.15 s, the rest is the network and Modal's routing (see
 [Results so far](#results-so-far)).
+
+MetaEncoder, JevAny and Glimmer are released models, used as they come (JevAny can also be
+fine-tuned). **The Clef-style decider does not exist yet as a model:** it is Clef's head on Muse
+Glimmer 30B, with no released weights. Our training pipeline works, but so far it has only run on
+one frame. It becomes a usable decider only after a real training run on hundreds of labelled
+frames ([#15](https://github.com/aim-do/glimmer-decide/issues/15)).
 
 ```
 camera frame ─┐                       ┌─► MetaEncoder: cos(task, option_i) ─► softmax ─► choice + p
@@ -212,6 +218,10 @@ GPU (no server restart needed). Its answers then end with *fine-tuned run: desk-
 `JEVANY_RUN` goes back to the released adapter.
 
 ### Clef-style Glimmer from scratch (experiment)
+
+There is no ready Clef-style model to download: unlike the deciders in the page, it exists only
+after you train it, and a useful run needs far more labelled frames than fine-tuning JevAny (see
+[#15](https://github.com/aim-do/glimmer-decide/issues/15) for the plan).
 
 The joint schema head of Cloudflare's [Clef](https://huggingface.co/Cloudflare/clef) on Muse
 Glimmer 30B. Nothing is warm-started: the decoder gets a fresh LoRA (B = 0, so it starts out
